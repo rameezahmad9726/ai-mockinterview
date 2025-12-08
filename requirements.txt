@@ -2,5 +2,20 @@ fastapi==0.99.0
 uvicorn[standard]==0.23.2
 python-multipart==0.0.6
 aiofiles==23.1.0
-# Use headless OpenCV on servers (no GUI deps)
 opencv-python-headless
+# Machine Learning & Processing
+torch
+transformers
+Pillow
+# Pinning mediapipe and protobuf to avoid conflict loops
+mediapipe==0.10.9
+protobuf==3.20.3
+numpy
+openai-whisper
+librosa
+soundfile
+# Resume Analysis
+pdfplumber
+python-docx
+openai
+python-dotenv

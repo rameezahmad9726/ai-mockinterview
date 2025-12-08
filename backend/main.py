@@ -7,6 +7,8 @@ import uuid
 import shutil
 
 from video_processor import process_video
+from modules.resume_parser import parse_resume
+from modules.question_generator import generate_questions
 
 app = FastAPI()
 
@@ -44,13 +46,45 @@ async def analyze_video(file: UploadFile = File(...)):
     print("📥 Video saved at:", video_path)
 
     # Process video (emotion + body language + audio extraction)
-    result = process_video(str(video_path))
+    # Run in threadpool to avoid blocking the async event loop
+    from fastapi.concurrency import run_in_threadpool
+    result = await run_in_threadpool(process_video, str(video_path))
 
     return {
         "status": "success",
         "session_id": session_id,
         "analysis": result
     }
+
+
+@app.post("/analyze-resume")
+async def analyze_resume(file: UploadFile = File(...)):
+    """
+    Upload a resume (PDF/DOCX) → parse text → generate interview questions.
+    """
+    session_id = str(uuid.uuid4())
+    session_dir = UPLOAD_ROOT / session_id / "resume"
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    file_path = session_dir / file.filename
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        # 1. Parse Text
+        resume_text = parse_resume(str(file_path))
+        
+        # 2. Generate Questions
+        questions_data = generate_questions(resume_text)
+        
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "questions": questions_data.get("questions", [])
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @app.get("/")
