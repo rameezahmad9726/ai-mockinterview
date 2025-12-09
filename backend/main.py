@@ -77,11 +77,18 @@ async def analyze_resume(file: UploadFile = File(...)):
         
         # 2. Generate Questions
         questions_data = generate_questions(resume_text)
-        
+        if questions_data.get("error"):
+            # Surface API errors to the client for debugging
+            return {
+                "status": "error",
+                "message": questions_data["error"],
+                "questions": questions_data.get("questions", []),
+            }
+
         return {
             "status": "success",
             "session_id": session_id,
-            "questions": questions_data.get("questions", [])
+            "questions": questions_data.get("questions", []),
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

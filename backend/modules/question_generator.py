@@ -1,32 +1,57 @@
-import os
-import openai
 import json
+import os
+import traceback
 from dotenv import load_dotenv
+
+# The OpenAI Python SDK renamed the client in v1.x. We import cautiously so
+# older 0.x installs still work.
+try:  # pragma: no cover - defensive import
+    from openai import OpenAI  # v1.x style
+except Exception:  # pragma: no cover
+    OpenAI = None
+import openai  # keeps 0.x fallback available
 
 load_dotenv()
 
-# Configure OpenAI API key
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if OPENAI_API_KEY:
+# Allow overriding model via env; default to a modern lightweight model.
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+
+def _get_client():
+    """
+    Create an OpenAI client compatible with both SDK 0.x and 1.x.
+    Raises a clear error if no API key is present or SDK is incompatible.
+    """
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env or environment.")
+
+    # Preferred path: SDK 1.x
+    if OpenAI is not None:
+        return OpenAI(api_key=OPENAI_API_KEY)
+
+    # Fallback: SDK 0.x legacy usage
     openai.api_key = OPENAI_API_KEY
+    return openai
+
 
 def generate_questions(resume_text: str) -> dict:
     """
     Generates interview questions based on resume text using an LLM.
-    Returns a dictionary with categorized questions.
+    Returns a dictionary with categorized questions or an error payload.
     """
-    if not OPENAI_API_KEY:
-        return {
-            "error": "OpenAI API key not found. Please set OPENAI_API_KEY in .env file.",
-            "questions": []
-        }
+    try:
+        client = _get_client()
+    except Exception as e:
+        # Key missing or SDK missing
+        return {"error": str(e), "questions": []}
 
     prompt = f"""
     You are an expert technical interviewer. I will provide you with a candidate's resume text.
     Your goal is to generate 5-7 tailored interview questions to evaluate this candidate.
 
     Resume Content:
-    {resume_text[:3000]}  # Truncate to avoid token limits if necessary
+    {resume_text[:3000]}
 
     Instructions:
     1. Analyze the candidate's skills, experience, and projects.
@@ -45,30 +70,42 @@ def generate_questions(resume_text: str) -> dict:
     """
 
     try:
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that generates interview questions in JSON format."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
-        )
+        # SDK 1.x path
+        if OpenAI is not None and isinstance(client, OpenAI):
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that generates interview questions in JSON format."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.7,
+                timeout=30,
+            )
+            content = response.choices[0].message.content
+        else:
+            # SDK 0.x fallback
+            response = client.ChatCompletion.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that generates interview questions in JSON format."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.7,
+            )
+            content = response["choices"][0]["message"]["content"]
 
-        content = response.choices[0].message.content
-        # validation to ensure we got valid JSON
         try:
-            data = json.loads(content)
-            return data
+            return json.loads(content)
         except json.JSONDecodeError:
-            # Fallback if raw text is returned, attempt to wrap it
+            # If model returns non-JSON, still surface the text
             return {"questions": [{"type": "General", "question": content}]}
 
     except Exception as e:
-        print(f"Error generating questions: {e}")
+        # Log full traceback for debugging on the server
+        traceback.print_exc()
         return {
             "error": str(e),
             "questions": [
                 {"type": "Error", "question": "Could not generate questions due to an API error."}
-            ]
+            ],
         }
