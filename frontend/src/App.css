@@ -1,0 +1,17 @@
+.App {
+  min-height: 100vh;
+  background: linear-gradient(to br, #0f172a, #1e293b, #0f172a);
+}
+
+/* Smooth transitions */
+* {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+/* Disable transition for animations */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

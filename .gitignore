@@ -135,3 +135,42 @@ dist
 .yarn/install-state.gz
 .pnp.*
 .tensorflow.whl
+tensorflow.whl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+ENV/
+env/
+
+# Backend specific
+backend/uploads/
+backend/reports/
+backend/*.log
+backend/test_video.mp4
+backend/*.mp4
+backend/*.wav
+*.whl
+
+# Frontend build
+frontend/build/
+frontend/.pnp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
