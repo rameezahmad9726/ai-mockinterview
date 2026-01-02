@@ -48,25 +48,14 @@ def generate_questions(resume_text: str) -> dict:
 
     prompt = f"""
     You are an expert technical interviewer. I will provide you with a candidate's resume text.
-    Your goal is to generate 5-7 tailored interview questions to evaluate this candidate.
-
+    Your goal is to generate 5 tailored interview questions to evaluate this candidate.
+    
     Resume Content:
-    {resume_text[:3000]}
+    {resume_text[:2000]}
 
     Instructions:
-    1. Analyze the candidate's skills, experience, and projects.
-    2. Generate a mix of:
-       - Technical Questions (based on specific tools/languages mentioned)
-       - Behavioral Questions (based on experiences/roles)
-       - Project-based Questions (asking for details on specific projects)
-    3. Return the output strictly as a JSON object with this structure:
-    {{
-      "questions": [
-        {{ "type": "Technical", "question": "..." }},
-        {{ "type": "Behavioral", "question": "..." }},
-        {{ "type": "Project", "question": "..." }}
-      ]
-    }}
+    - Return ONLY a JSON object.
+    - Format: {{"questions": [{{"type": "Technical|Behavioral|Project", "question": "..."}}]}}
     """
 
     try:
@@ -75,11 +64,12 @@ def generate_questions(resume_text: str) -> dict:
             response = client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that generates interview questions in JSON format."},
+                    {"role": "system", "content": "You are a technical interviewer that outputs strictly JSON."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.7,
-                timeout=30,
+                temperature=0.3, # Lower temperature is faster and more focused
+                response_format={ "type": "json_object" }, # Use native JSON mode
+                timeout=15, # Tighten timeout
             )
             content = response.choices[0].message.content
         else:
@@ -93,6 +83,14 @@ def generate_questions(resume_text: str) -> dict:
                 temperature=0.7,
             )
             content = response["choices"][0]["message"]["content"]
+
+        # Strip markdown code blocks if present
+        if content.startswith("```json"):
+            content = content.replace("```json", "").replace("```", "")
+        elif content.startswith("```"):
+            content = content.replace("```", "")
+        
+        content = content.strip()
 
         try:
             return json.loads(content)

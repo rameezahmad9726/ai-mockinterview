@@ -33,7 +33,7 @@ class BodyLanguageAnalyzer:
 
         return angle
 
-    def analyze_video(self, frames_dir, max_frames=120):
+    def analyze_video(self, frames_dir, max_frames=500):
         frames = sorted(glob.glob(os.path.join(frames_dir, "*.jpg")))
 
         posture_scores = []
@@ -70,13 +70,13 @@ class BodyLanguageAnalyzer:
             prev_left_hand = left_wrist
             prev_right_hand = right_wrist
 
-        posture = float(np.mean(posture_scores)) if posture_scores else 0
-        movement = float(np.mean(movement_scores)) if movement_scores else 0
+        posture = round(float(np.mean(posture_scores)), 2) if posture_scores else 0
+        movement = round(float(np.mean(movement_scores)), 2) if movement_scores else 0
 
-        # Convert movement score into confidence indicator
-        if movement < 0.002:
+        # Adjust thresholds for 1 FPS (movement between frames is naturally larger)
+        if movement < 0.05:
             gesture_label = "Very still (possibly stiff)"
-        elif movement < 0.01:
+        elif movement < 0.30:
             gesture_label = "Normal controlled movement"
         else:
             gesture_label = "Excessive hand movement"
@@ -86,5 +86,5 @@ class BodyLanguageAnalyzer:
             "movement_score": movement,
             "gesture_label": gesture_label,
             "missing_frames": missing_frames,
-            "total_frames": len(frames),
+            "frames_processed": len(posture_scores) + missing_frames,
         }

@@ -4,13 +4,51 @@ import VideoUpload from './components/VideoUpload';
 import ProcessingStatus from './components/ProcessingStatus';
 import ResultsDisplay from './components/ResultsDisplay';
 import ResumeEvaluator from './components/ResumeEvaluator';
+import LiveInterview from './components/LiveInterview';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('video'); // 'video' | 'resume'
+  const [activeTab, setActiveTab] = useState('video'); // 'video' | 'resume' | 'live'
   const [currentFile, setCurrentFile] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
+  const [interviewQuestions, setInterviewQuestions] = useState([]);
+  const [sessionId, setSessionId] = useState(`session_${Date.now()}`);
+
+  const handleStartInterview = (questions) => {
+    setInterviewQuestions(questions);
+    setSessionId(`session_${Date.now()}`);
+    setActiveTab('live');
+  };
+
+  const pollAnalysisStatus = async (sid) => {
+    try {
+      const response = await fetch(`http://localhost:8000/analysis-status/${sid}`);
+      const data = await response.json();
+
+      if (data.status === "error") {
+        setError(data.message);
+        setIsProcessing(false);
+        return;
+      }
+
+      if (data.progress === 100 && data.result) {
+        const report = data.result.report || {};
+        setResults({
+          ...(report || {}),
+          report_json_path: data.result.report_json_path,
+          report_html_path: data.result.report_html_path,
+        });
+        setIsProcessing(false);
+      } else {
+        // Continue polling
+        setTimeout(() => pollAnalysisStatus(sid), 2000);
+      }
+    } catch (err) {
+      console.error('Polling error:', err);
+      setTimeout(() => pollAnalysisStatus(sid), 5000);
+    }
+  };
 
   const handleUpload = async (file) => {
     setCurrentFile(file);
@@ -22,7 +60,7 @@ function App() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('http://127.0.0.1:8000/analyze', {
+      const response = await fetch('http://localhost:8000/analyze', {
         method: 'POST',
         body: formData,
       });
@@ -32,20 +70,11 @@ function App() {
       }
 
       const data = await response.json();
-      // Backend returns { status, session_id, analysis }
-      // where `analysis` is the object returned by process_video()
-      // process_video() returns { report: { ... }, report_json_path, report_html_path }
-      const analysis = data.analysis || {};
-      const report = analysis.report || {};
-      // Compose `results` expected by ResultsDisplay (emotion_analysis, speech_analysis, body_language, etc.)
-      const resultsPayload = {
-        ...(report || {}),
-        report_json_path: analysis.report_json_path,
-        report_html_path: analysis.report_html_path,
-      };
-
-      setResults(resultsPayload);
-      setIsProcessing(false);
+      if (data.status === "started") {
+        pollAnalysisStatus(data.session_id);
+      } else {
+        throw new Error("Failed to start analysis");
+      }
     } catch (err) {
       console.error('Error uploading video:', err);
       setError(err.message);
@@ -61,7 +90,7 @@ function App() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold text-white">
-                🎥 AI Mock Interview
+                🎥 Interveux
               </h1>
               <p className="text-slate-400 mt-1">
                 Real-time video analysis & performance feedback
@@ -99,6 +128,16 @@ function App() {
           >
             Resume Evaluator
           </button>
+          <button
+            onClick={() => setActiveTab('live')}
+            disabled={interviewQuestions.length === 0}
+            className={`pb-4 px-2 font-medium text-sm transition-colors relative
+              ${activeTab === 'live'
+                ? 'text-indigo-400 border-b-2 border-indigo-400'
+                : (interviewQuestions.length === 0 ? 'text-slate-600 cursor-not-allowed' : 'text-slate-400 hover:text-slate-200')}`}
+          >
+            Live Interview
+          </button>
         </div>
 
         {activeTab === 'video' ? (
@@ -132,11 +171,14 @@ function App() {
               ) : null}
             </div>
           </div>
-        ) : (
+        ) : activeTab === 'resume' ? (
           /* Resume Evaluator Tab */
           <div className="max-w-3xl mx-auto">
-            <ResumeEvaluator />
+            <ResumeEvaluator onStartInterview={handleStartInterview} />
           </div>
+        ) : (
+          /* Live Interview Tab */
+          <LiveInterview questions={interviewQuestions} sessionId={sessionId} />
         )}
       </main>
 

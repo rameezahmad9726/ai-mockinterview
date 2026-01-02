@@ -1,16 +1,26 @@
 import React, { useState } from 'react';
-import { ArrowUpTrayIcon, DocumentTextIcon, ClipboardDocumentCheckIcon } from '@heroicons/react/24/outline';
+import { ArrowUpTrayIcon, DocumentTextIcon, ClipboardDocumentCheckIcon, VideoCameraIcon } from '@heroicons/react/24/outline';
 
-function ResumeEvaluator() {
+function ResumeEvaluator({ onStartInterview }) {
     const [file, setFile] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [questions, setQuestions] = useState(null);
     const [error, setError] = useState(null);
+    const [analysisStage, setAnalysisStage] = useState(0);
+
+    const stages = [
+        "Reading document...",
+        "Extracting skills...",
+        "Analyzing experience...",
+        "Generating project questions...",
+        "Finalizing interview..."
+    ];
 
     const handleFileChange = (e) => {
-        if (e.target.files && e.target.files[0]) {
+        if (e.target.files && e.target.files.length > 0) {
             setFile(e.target.files[0]);
             setError(null);
+            setQuestions(null);
         }
     };
 
@@ -20,12 +30,18 @@ function ResumeEvaluator() {
         setIsAnalyzing(true);
         setError(null);
         setQuestions(null);
+        setAnalysisStage(0);
+
+        // Start cycling through stages for better UI feel
+        const stageInterval = setInterval(() => {
+            setAnalysisStage(prev => (prev < stages.length - 1 ? prev + 1 : prev));
+        }, 1500);
 
         const formData = new FormData();
         formData.append('file', file);
 
         try {
-            const response = await fetch('http://127.0.0.1:8000/analyze-resume', {
+            const response = await fetch('http://localhost:8000/analyze-resume', {
                 method: 'POST',
                 body: formData,
             });
@@ -44,6 +60,7 @@ function ResumeEvaluator() {
             console.error('Error analyzing resume:', err);
             setError(err.message);
         } finally {
+            clearInterval(stageInterval);
             setIsAnalyzing(false);
         }
     };
@@ -91,7 +108,7 @@ function ResumeEvaluator() {
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                 </svg>
-                                Analyzing...
+                                {stages[analysisStage]}
                             </span>
                         ) : (
                             <span className="flex items-center justify-center">
@@ -111,32 +128,25 @@ function ResumeEvaluator() {
 
             {/* Results Section */}
             {questions && (
-                <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-sm animate-fade-in">
-                    <h2 className="text-xl font-semibold text-white mb-6 flex items-center">
-                        <ClipboardDocumentCheckIcon className="h-6 w-6 mr-2 text-green-400" />
-                        Generated Interview Questions
-                    </h2>
-
-                    <div className="grid gap-6">
-                        {questions.map((q, idx) => (
-                            <div
-                                key={idx}
-                                className="bg-slate-900/50 rounded-lg p-5 border border-slate-700/50 hover:border-slate-600 transition-colors"
-                            >
-                                <div className="flex items-start justify-between mb-2">
-                                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border
-                    ${q.type === 'Technical' ? 'bg-blue-900/30 text-blue-300 border-blue-800' :
-                                            q.type === 'Behavioral' ? 'bg-purple-900/30 text-purple-300 border-purple-800' :
-                                                'bg-emerald-900/30 text-emerald-300 border-emerald-800'}`}>
-                                        {q.type}
-                                    </span>
-                                </div>
-                                <p className="text-slate-200 font-medium leading-relaxed">
-                                    {q.question}
-                                </p>
-                            </div>
-                        ))}
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-10 shadow-xl animate-fade-in text-center">
+                    <div className="bg-green-500/20 text-green-400 p-4 rounded-full w-16 h-16 mx-auto mb-6 flex items-center justify-center border border-green-500/30">
+                        <ClipboardDocumentCheckIcon className="h-8 w-8" />
                     </div>
+
+                    <h2 className="text-2xl font-bold text-white mb-2">
+                        Questions Generated Successfully!
+                    </h2>
+                    <p className="text-slate-400 mb-8 max-w-md mx-auto">
+                        Your resume has been analyzed and 5 tailored interview questions are ready. Click below to begin your live mock interview.
+                    </p>
+
+                    <button
+                        onClick={() => onStartInterview(questions)}
+                        className="bg-green-600 hover:bg-green-700 text-white px-10 py-4 rounded-full font-bold text-lg shadow-xl shadow-green-900/30 transition-all hover:scale-105 flex items-center mx-auto"
+                    >
+                        <VideoCameraIcon className="h-6 w-6 mr-3" />
+                        Start Live Interview
+                    </button>
                 </div>
             )}
         </div>

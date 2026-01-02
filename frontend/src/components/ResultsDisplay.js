@@ -39,6 +39,12 @@ export default function ResultsDisplay({ results }) {
             value={`${summary.clarity_score || 0}/10`}
             color="from-orange-600 to-red-600"
           />
+          <ScoreCard
+            icon="🛡️"
+            label="Confidence"
+            value={`${summary.confidence_score || 0}/10`}
+            color="from-indigo-600 to-purple-600"
+          />
         </div>
       </div>
 
@@ -74,7 +80,12 @@ export default function ResultsDisplay({ results }) {
       )}
 
       {/* Speech Analysis */}
-      {!speech.error && (
+      {speech.error ? (
+        <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 shadow-xl border-l-4 border-l-red-500">
+          <h3 className="text-lg font-bold text-white mb-2">🎤 Speech Analysis</h3>
+          <p className="text-red-400 text-sm">⚠️ {speech.error}</p>
+        </div>
+      ) : (
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 shadow-xl">
           <h3 className="text-lg font-bold text-white mb-4">🎤 Speech Analysis</h3>
           <div className="grid grid-cols-2 gap-3">
@@ -98,11 +109,64 @@ export default function ResultsDisplay({ results }) {
             </div>
           </div>
           {speech.transcript && (
-            <div className="mt-4 bg-slate-700 rounded p-3">
-              <p className="text-slate-400 text-xs mb-2">Transcript</p>
-              <p className="text-slate-200 text-sm">{speech.transcript}</p>
+            <div className="mt-4 bg-slate-700 rounded-lg p-4">
+              <p className="text-slate-400 text-xs mb-3 uppercase tracking-wider font-semibold">Transcript</p>
+              {speech.formatted_transcript && speech.formatted_transcript.length > 0 ? (
+                <div className="space-y-4 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
+                  {speech.formatted_transcript.map((segment, idx) => (
+                    <div key={idx} className="flex flex-col">
+                      <span className={`text-[10px] font-bold mb-1 uppercase ${segment.speaker === 'Interviewer' ? 'text-blue-400' : 'text-emerald-400'
+                        }`}>
+                        {segment.speaker}
+                      </span>
+                      <div className={`p-3 rounded-lg text-sm border ${segment.speaker === 'Interviewer'
+                        ? 'bg-blue-900/20 border-blue-500/30 text-blue-100'
+                        : 'bg-emerald-900/20 border-emerald-500/30 text-emerald-100'
+                        }`}>
+                        {segment.text}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-slate-900/50 p-3 rounded border border-slate-600">
+                  <p className="text-slate-200 text-sm leading-relaxed">{speech.transcript}</p>
+                </div>
+              )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Confidence & Tone Insights (AI-Powered) */}
+      {(speech.tone_analysis || speech.improvement_tip) && (
+        <div className="bg-gradient-to-br from-indigo-900/40 to-slate-800 border border-indigo-500/30 rounded-lg p-6 shadow-xl relative overflow-hidden">
+          <div className="absolute top-0 right-0 p-2 opacity-10">
+            <span className="text-6xl">🛡️</span>
+          </div>
+          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            🛡️ Confidence & Tone Insights
+            <span className="text-[10px] bg-indigo-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">AI Analysis</span>
+          </h3>
+
+          <div className="space-y-4">
+            {speech.tone_analysis && (
+              <div className="bg-indigo-950/30 border border-indigo-500/20 rounded p-4">
+                <p className="text-indigo-300 text-xs mb-1 uppercase font-semibold">Communication Style</p>
+                <p className="text-white text-sm leading-relaxed">{speech.tone_analysis}</p>
+              </div>
+            )}
+
+            {speech.improvement_tip && (
+              <div className="bg-emerald-950/30 border border-emerald-500/20 rounded p-4">
+                <p className="text-emerald-300 text-xs mb-1 uppercase font-semibold">Pro Improvement Tip</p>
+                <div className="flex gap-2 items-start">
+                  <span className="text-emerald-400 text-lg">💡</span>
+                  <p className="text-emerald-50 text-sm italic">{speech.improvement_tip}</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -141,7 +205,7 @@ export default function ResultsDisplay({ results }) {
                 <span className="text-slate-300 text-sm">✅ JSON Report</span>
                 <a
                   className="text-blue-400 underline text-sm"
-                  href={`http://127.0.0.1:8000/reports/${results.report_json_path.split('/').pop()}`}
+                  href={`http://localhost:8000/reports/${results.report_json_path.split('/').pop()}`}
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -149,7 +213,7 @@ export default function ResultsDisplay({ results }) {
                 </a>
                 <a
                   className="bg-slate-700 hover:bg-slate-600 text-slate-100 px-3 py-1 rounded text-sm"
-                  href={`http://127.0.0.1:8000/reports/${results.report_json_path.split('/').pop()}`}
+                  href={`http://localhost:8000/reports/${results.report_json_path.split('/').pop()}`}
                   download
                 >
                   Download JSON
@@ -162,7 +226,7 @@ export default function ResultsDisplay({ results }) {
                 <span className="text-slate-300 text-sm">✅ HTML Report</span>
                 <a
                   className="text-blue-400 underline text-sm"
-                  href={`http://127.0.0.1:8000/reports/${results.report_html_path.split('/').pop()}`}
+                  href={`http://localhost:8000/reports/${results.report_html_path.split('/').pop()}`}
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -170,7 +234,7 @@ export default function ResultsDisplay({ results }) {
                 </a>
                 <a
                   className="bg-slate-700 hover:bg-slate-600 text-slate-100 px-3 py-1 rounded text-sm"
-                  href={`http://127.0.0.1:8000/reports/${results.report_html_path.split('/').pop()}`}
+                  href={`http://localhost:8000/reports/${results.report_html_path.split('/').pop()}`}
                   download
                 >
                   Download HTML

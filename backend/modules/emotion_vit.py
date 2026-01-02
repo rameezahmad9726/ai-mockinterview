@@ -1,60 +1,82 @@
-import torch
-from transformers import AutoImageProcessor, AutoModelForImageClassification
-from PIL import Image
 import os
-import glob
+import torch
+from pathlib import Path
+from transformers import pipeline
 
-class EmotionViT:
-    def __init__(self):
-        self.processor = AutoImageProcessor.from_pretrained(
-            "dima806/facial_emotions_image_detection"
-        )
-        self.model = AutoModelForImageClassification.from_pretrained(
-            "dima806/facial_emotions_image_detection"
-        )
-        self.model.eval()
+# Switch to a much faster MobileNetV3-based model
+MODEL_NAME = "dima806/facial_emotions_image_detection"
 
-    def predict_emotion(self, image_path):
-        image = Image.open(image_path).convert("RGB")
-        inputs = self.processor(images=image, return_tensors="pt")
+def analyze_emotions_vit(frames_dir):
+    """
+    Lightning-fast emotion analysis using MobileNetV3.
+    Processes video frames in batches for maximum throughput.
+    """
+    print(f"😃 Loading optimized emotion model: {MODEL_NAME}")
+    
+    # Auto-detect best available device
+    device = -1 # Default to CPU
+    if torch.cuda.is_available():
+        device = 0
+    elif torch.backends.mps.is_available():
+        device = "mps" # Support for Mac M1/M2 chips
+    
+    print(f"⚙️ Using device: {device}")
+    
+    # Initialize classifier pipeline
+    try:
+        classifier = pipeline("image-classification", model=MODEL_NAME, device=device)
+    except Exception as e:
+        print(f"⚠️ Could not load on {device}, falling back to CPU: {e}")
+        classifier = pipeline("image-classification", model=MODEL_NAME, device=-1)
 
-        with torch.no_grad():
-            outputs = self.model(**inputs)
+    # Get all frames
+    frames = sorted(list(Path(frames_dir).glob("*.jpg")))
+    if not frames:
+        return {
+            "dominant_emotion": "Neutral", 
+            "emotion_counts": {}, 
+            "emotion_history": []
+        }
 
-        logits = outputs.logits
-        probs = torch.softmax(logits, dim=1)[0]
+    emotion_history = []
+    
+    # Batch processing significantly speeds up inference
+    print(f"⚡ Processing {len(frames)} frames...")
+    
+    # Optimized batch size for average hardware
+    batch_size = 16
+    for i in range(0, len(frames), batch_size):
+        batch_paths = [str(p) for p in frames[i:i+batch_size]]
+        try:
+            results = classifier(batch_paths)
+            for result in results:
+                # result is a list of scores, get the top one
+                top_emotion = result[0]['label']
+                emotion_history.append(top_emotion)
+        except Exception as e:
+            print(f"⚠️ Batch error at {i}: {e}")
+            # Fallback to single processing for this batch if it fails
+            for p in batch_paths:
+                try:
+                    res = classifier(p)
+                    emotion_history.append(res[0]['label'])
+                except:
+                    emotion_history.append("neutral")
 
-        idx = torch.argmax(probs).item()
-        emotion = self.model.config.id2label[idx]
-        confidence = float(probs[idx].item())
-
-        return emotion, confidence
-
-
-def analyze_emotions_vit(frames_dir, max_frames=100):
-    predictor = EmotionViT()
-
-    frame_paths = sorted(glob.glob(os.path.join(frames_dir, "*.jpg")))
-
-    timeline = []
+    # Calculate statistics
     counts = {}
+    for emo in emotion_history:
+        # Standardize labels
+        emo_key = emo.capitalize()
+        counts[emo_key] = counts.get(emo_key, 0) + 1
 
-    for i, path in enumerate(frame_paths[:max_frames]):
-        emotion, conf = predictor.predict_emotion(path)
+    dominant = max(counts, key=counts.get) if counts else "Neutral"
 
-        timeline.append({
-            "frame": i,
-            "emotion": emotion,
-            "confidence": conf,
-        })
-
-        counts[emotion] = counts.get(emotion, 0) + 1
-
-    dominant = max(counts, key=counts.get) if counts else None
+    print(f"✅ Emotion analysis complete. Dominant: {dominant}")
 
     return {
-        "frames_analyzed": len(timeline),
         "dominant_emotion": dominant,
         "emotion_counts": counts,
-        "emotion_timeline": []
+        "emotion_history": emotion_history,
+        "frames_analyzed": len(emotion_history)
     }

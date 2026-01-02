@@ -18,7 +18,8 @@ def parse_resume(file_path: str) -> str:
 def _extract_from_pdf(file_path: str) -> str:
     text = ""
     with pdfplumber.open(file_path) as pdf:
-        for page in pdf.pages:
+        # Limit to first 3 pages for maximum speed
+        for page in pdf.pages[:3]:
             extracted = page.extract_text()
             if extracted:
                 text += extracted + "\n"

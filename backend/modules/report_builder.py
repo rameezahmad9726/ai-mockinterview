@@ -8,6 +8,48 @@ def _safe_get(d, key, default=None):
     return d.get(key) if isinstance(d, dict) else default
 
 
+def _build_transcript_html(speech):
+    """Build HTML for transcript with speaker separation if available."""
+    formatted_transcript = _safe_get(speech, "formatted_transcript", [])
+    
+    if formatted_transcript and isinstance(formatted_transcript, list):
+        # Build speaker-separated transcript
+        transcript_html = '<div style="background: #f9fafb; padding: 16px; border-radius: 8px; max-height: 500px; overflow-y: auto;">'
+        
+        for segment in formatted_transcript:
+            speaker = segment.get("speaker", "Unknown")
+            text = html.escape(segment.get("text", ""))
+            
+            # Different styling for interviewer vs interviewee
+            if speaker == "Interviewer":
+                bg_color = "#dbeafe"
+                text_color = "#1e40af"
+                label_color = "#1e3a8a"
+            else:
+                bg_color = "#dcfce7"
+                text_color = "#166534"
+                label_color = "#14532d"
+            
+            transcript_html += f'''
+                <div style="margin-bottom: 12px;">
+                    <div style="font-weight: 600; font-size: 12px; color: {label_color}; margin-bottom: 4px;">
+                        {speaker}
+                    </div>
+                    <div style="background: {bg_color}; color: {text_color}; padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.6;">
+                        {text}
+                    </div>
+                </div>
+            '''
+        
+        transcript_html += '</div>'
+        return transcript_html
+    else:
+        # Fallback to plain transcript
+        transcript = _safe_get(speech, "transcript", "")
+        transcript_escaped = html.escape(transcript) if transcript else "[No transcript]"
+        return f'<pre>{transcript_escaped}</pre>'
+
+
 def build_html_report(report: dict) -> str:
     """
     Take the full analysis report (same structure as video_processor output)
@@ -302,7 +344,7 @@ def build_html_report(report: dict) -> str:
     <h3>Transcript</h3>
     <details open>
         <summary>Show / hide transcript</summary>
-        <pre>{transcript_html}</pre>
+        {_build_transcript_html(speech)}
     </details>
 
     <!-- Raw JSON (optional for debugging) -->

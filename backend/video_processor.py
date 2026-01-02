@@ -12,28 +12,45 @@ from modules.speech_analysis import SpeechAnalyzer
 
 
 def extract_frames(video_path, output_dir, fps=1):
-    """Extract frames at a given FPS using OpenCV."""
+    """
+    Extract frames at a given FPS. 
+    Sequential reading is used because seeking (CAP_PROP_POS_FRAMES) 
+    is often unreliable with browser-recorded WebM files.
+    """
     os.makedirs(output_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(video_path)
-    frame_rate = cap.get(cv2.CAP_PROP_FPS)
-    interval = max(int(frame_rate / fps), 1)
-
-    frame_count = 0
+    if not cap.isOpened():
+        print(f"❌ Could not open video file: {video_path}")
+        return 0
+        
+    source_fps = cap.get(cv2.CAP_PROP_FPS)
+    if source_fps <= 0:
+        source_fps = 30 # Fallback
+    
+    interval = max(int(source_fps / fps), 1)
+    
     saved = 0
+    max_to_save = 60
+    current_frame = 0
 
-    while True:
+    print(f"🎬 Starting frame extraction (Source FPS: {source_fps}, Interval: {interval})")
+
+    while saved < max_to_save:
         ret, frame = cap.read()
         if not ret:
             break
-
-        if frame_count % interval == 0:
-            cv2.imwrite(os.path.join(output_dir, f"frame_{saved}.jpg"), frame)
+            
+        if current_frame % interval == 0:
+            # Resize for speed
+            frame_small = cv2.resize(frame, (320, 240))
+            cv2.imwrite(os.path.join(output_dir, f"frame_{saved}.jpg"), frame_small)
             saved += 1
-
-        frame_count += 1
+            
+        current_frame += 1
 
     cap.release()
+    print(f"✅ Extracted {saved} frames total.")
     return saved
 
 
@@ -46,9 +63,9 @@ def run_body_language_analysis(frames_dir):
     return analyzer.analyze_video(frames_dir)
 
 
-def run_speech_analysis(audio_path):
+def run_speech_analysis(audio_path, questions=None):
     analyzer = SpeechAnalyzer()
-    return analyzer.analyze_audio(audio_path)
+    return analyzer.analyze_audio(audio_path, questions)
 
 
 def build_final_report(emotion, body, speech, audio_path):
@@ -65,11 +82,16 @@ def build_final_report(emotion, body, speech, audio_path):
             "speaking_speed_wpm": speech.get("speaking_speed_wpm"),
             "clarity_score": speech.get("clarity_score"),
             "confidence_score": speech.get("confidence_score"),
+            "tone_analysis": speech.get("tone_analysis"),
+            "improvement_tip": speech.get("improvement_tip")
         }
     }
 
 
-def process_video(video_path):
+def process_video(video_path, session_id=None, questions=None, on_progress=None):
+    def update_progress(percent, message):
+        if on_progress:
+            on_progress(percent, message)
 
     temp_root = Path(tempfile.mkdtemp())
     frames_dir = temp_root / "frames"
@@ -78,9 +100,11 @@ def process_video(video_path):
     frames_dir.mkdir(exist_ok=True)
     audio_dir.mkdir(exist_ok=True)
 
+    update_progress(10, "Extracting video frames...")
     print("📸 Extracting frames…")
     extract_frames(video_path, str(frames_dir))
 
+    update_progress(25, "Extracting audio track...")
     print("🎵 Extracting audio…")
     audio_path = extract_audio(video_path, audio_dir)
 
@@ -89,6 +113,7 @@ def process_video(video_path):
     # -------------------------
     if not audio_path or not Path(audio_path).exists():
         print("⚠️ No audio extracted — skipping speech analysis")
+        update_progress(40, "No audio found, skipping transcription...")
         speech = {
             "error": "No audio extracted",
             "transcript": "",
@@ -98,15 +123,19 @@ def process_video(video_path):
             "confidence_score": 0,
         }
     else:
+        update_progress(40, "Running speech-to-text and AI diarization...")
         print("🎤 Running speech analysis…")
-        speech = run_speech_analysis(audio_path)
+        speech = run_speech_analysis(audio_path, questions)
 
+    update_progress(60, "Analyzing facial expressions and emotions...")
     print("😃 Running emotion analysis…")
     emotion_data = run_emotion_analysis(str(frames_dir))
 
+    update_progress(80, "Analyzing body language and posture...")
     print("🧍 Running body language analysis…")
     body_data = run_body_language_analysis(str(frames_dir))
 
+    update_progress(90, "Generating final report and insights...")
     print("📄 Creating final report…")
     report = build_final_report(emotion_data, body_data, speech, str(audio_path))
 
@@ -118,6 +147,8 @@ def process_video(video_path):
     reports_dir.mkdir(exist_ok=True)
 
     base_name = Path(video_path).stem.replace(" ", "_")
+    if session_id:
+        base_name = f"{session_id}_{base_name}"
     json_path = reports_dir / f"{base_name}.json"
     html_path = reports_dir / f"{base_name}.html"
 
