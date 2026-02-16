@@ -21,7 +21,8 @@ def extract_frames(video_path, output_dir, fps=1):
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"❌ Could not open video file: {video_path}")
+        # Avoid non-ASCII characters that break Windows consoles
+        print(f"[ERROR] Could not open video file: {video_path}")
         return 0
         
     source_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -34,7 +35,7 @@ def extract_frames(video_path, output_dir, fps=1):
     max_to_save = 60
     current_frame = 0
 
-    print(f"🎬 Starting frame extraction (Source FPS: {source_fps}, Interval: {interval})")
+    print(f"[INFO] Starting frame extraction (Source FPS: {source_fps}, Interval: {interval})")
 
     while saved < max_to_save:
         ret, frame = cap.read()
@@ -50,7 +51,7 @@ def extract_frames(video_path, output_dir, fps=1):
         current_frame += 1
 
     cap.release()
-    print(f"✅ Extracted {saved} frames total.")
+    print(f"[INFO] Extracted {saved} frames total.")
     return saved
 
 
@@ -101,18 +102,18 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
     audio_dir.mkdir(exist_ok=True)
 
     update_progress(10, "Extracting video frames...")
-    print("📸 Extracting frames…")
+    print("[STEP] Extracting frames...")
     extract_frames(video_path, str(frames_dir))
 
     update_progress(25, "Extracting audio track...")
-    print("🎵 Extracting audio…")
+    print("[STEP] Extracting audio...")
     audio_path = extract_audio(video_path, audio_dir)
 
     # -------------------------
     # Handle missing audio
     # -------------------------
     if not audio_path or not Path(audio_path).exists():
-        print("⚠️ No audio extracted — skipping speech analysis")
+        print("[WARN] No audio extracted — skipping speech analysis")
         update_progress(40, "No audio found, skipping transcription...")
         speech = {
             "error": "No audio extracted",
@@ -124,19 +125,19 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
         }
     else:
         update_progress(40, "Running speech-to-text and AI diarization...")
-        print("🎤 Running speech analysis…")
+        print("[STEP] Running speech analysis...")
         speech = run_speech_analysis(audio_path, questions)
 
     update_progress(60, "Analyzing facial expressions and emotions...")
-    print("😃 Running emotion analysis…")
+    print("[STEP] Running emotion analysis...")
     emotion_data = run_emotion_analysis(str(frames_dir))
 
     update_progress(80, "Analyzing body language and posture...")
-    print("🧍 Running body language analysis…")
+    print("[STEP] Running body language analysis...")
     body_data = run_body_language_analysis(str(frames_dir))
 
     update_progress(90, "Generating final report and insights...")
-    print("📄 Creating final report…")
+    print("[STEP] Creating final report...")
     report = build_final_report(emotion_data, body_data, speech, str(audio_path))
 
     # ---------------------------------------------------
@@ -156,15 +157,15 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
     with json_path.open("w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=4)
 
-    print(f"✅ JSON saved → {json_path}")
+    print(f"[INFO] JSON saved to {json_path}")
 
     # Save HTML
     try:
         save_html_report(report, html_path)
-        print(f"📄 HTML saved → {html_path}")
+        print(f"[INFO] HTML saved to {html_path}")
         report["report_html_path"] = str(html_path)
     except Exception as e:
-        print("❌ HTML generation failed:", e)
+        print("[ERROR] HTML generation failed:", e)
         report["report_html_path"] = None
 
     report["report_json_path"] = str(json_path)

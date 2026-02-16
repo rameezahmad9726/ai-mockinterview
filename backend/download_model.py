@@ -8,6 +8,6 @@ print("This is a larger model (ConvNeXt V2 Large), ensure you have enough space/
 try:
     AutoImageProcessor.from_pretrained(model_name)
     AutoModelForImageClassification.from_pretrained(model_name)
-    print("\n✅ Model downloaded and cached successfully!")
+    print("\n[INFO] Model downloaded and cached successfully!")
 except Exception as e:
-    print(f"\n❌ Error downloading model: {e}")
+    print(f"\n[ERROR] Error downloading model: {e}")
