@@ -17,20 +17,20 @@ def test_imports():
     print("\n=== Testing Imports ===")
     try:
         from modules.video_processor import extract_frames
-        print("✓ extract_frames imported")
+        print("[INFO] extract_frames imported")
         
         from modules.audio_extractor import extract_audio
-        print("✓ extract_audio imported")
+        print("[INFO] extract_audio imported")
         
         from modules.facial_emotions import analyze_emotions
-        print("✓ analyze_emotions imported")
+        print("[INFO] analyze_emotions imported")
         
         from modules.speech_analysis import SpeechAnalyzer
-        print("✓ SpeechAnalyzer imported")
+        print("[INFO] SpeechAnalyzer imported")
         
         return True
     except Exception as e:
-        print(f"✗ Import failed: {e}")
+        print(f"[ERROR] Import failed: {e}")
         return False
 
 
@@ -42,21 +42,21 @@ def test_speech_analyzer():
         
         # Create analyzer (model not loaded yet)
         analyzer = SpeechAnalyzer(model_name="base")
-        print("✓ SpeechAnalyzer instantiated (model not loaded yet)")
+        print("[INFO] SpeechAnalyzer instantiated (model not loaded yet)")
         
         # Verify lazy attributes
         assert analyzer.model is None, "Model should be None at init"
         assert analyzer._load_error is None, "Load error should be None at init"
-        print("✓ Lazy-load state verified (model=None, _load_error=None)")
+        print("[INFO] Lazy-load state verified (model=None, _load_error=None)")
         
         # Try to analyze (will trigger model load on next use)
         # We won't actually call it since it needs a real audio file,
         # but we verified the class structure
-        print("✓ SpeechAnalyzer ready (model will load on first analyze_audio call)")
+        print("[INFO] SpeechAnalyzer ready (model will load on first analyze_audio call)")
         
         return True
     except Exception as e:
-        print(f"✗ SpeechAnalyzer test failed: {e}")
+        print(f"[ERROR] SpeechAnalyzer test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -95,20 +95,20 @@ def test_folder_structure():
             assert audio_dir.exists(), "audio/ folder missing"
             assert frames_dir.exists(), "frames/ folder missing"
             
-            print(f"✓ Created video folder: {video_folder.name}")
-            print(f"  ├─ original/")
-            print(f"  ├─ audio/")
-            print(f"  └─ frames/")
+            print(f"[INFO] Created video folder: {video_folder.name}")
+            print(f"      original/")
+            print(f"      audio/")
+            print(f"      frames/")
             
             # Save a test file
             test_file = original_dir / original_filename
             test_file.write_bytes(b"test video content")
             assert test_file.exists(), "Failed to save test file"
-            print(f"✓ Successfully saved {original_filename} to original/")
+            print(f"[INFO] Successfully saved {original_filename} to original/")
             
         return True
     except Exception as e:
-        print(f"✗ Folder structure test failed: {e}")
+        print(f"[ERROR] Folder structure test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -120,17 +120,17 @@ def test_video_processor_imports():
     try:
         # The main video_processor.py in backend/
         from video_processor import process_video
-        print("✓ process_video function imported from main video_processor")
+        print("[INFO] process_video function imported from main video_processor")
         
         # Check that it imports modules correctly
         import video_processor as vp
         assert hasattr(vp, 'extract_audio'), "extract_audio not imported"
         assert hasattr(vp, 'extract_frames'), "extract_frames not imported"
-        print("✓ Main video_processor has correct module imports")
+        print("[INFO] Main video_processor has correct module imports")
         
         return True
     except Exception as e:
-        print(f"✗ Video processor test failed: {e}")
+        print(f"[ERROR] Video processor test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -158,16 +158,16 @@ def main():
     total = len(results)
     
     for test_name, result in results:
-        status = "✓ PASS" if result else "✗ FAIL"
+        status = "[PASS]" if result else "[FAIL]"
         print(f"{status}: {test_name}")
     
     print(f"\nTotal: {passed}/{total} tests passed")
     
     if passed == total:
-        print("\n🎉 All tests passed! App is ready to run.")
+        print("\n[INFO] All tests passed! App is ready to run.")
         return 0
     else:
-        print(f"\n⚠️  {total - passed} test(s) failed. Please check the errors above.")
+        print(f"\n[WARN] {total - passed} test(s) failed. Please check the errors above.")
         return 1
 
 

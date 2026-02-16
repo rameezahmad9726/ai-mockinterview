@@ -11,7 +11,7 @@ import os
 
 from video_processor import process_video
 from modules.resume_parser import parse_resume
-from modules.question_generator import generate_questions
+from modules.question_generator import generate_questions, analyze_resume_communication
 from modules.tts import generate_speech
 
 app = FastAPI()
@@ -114,11 +114,17 @@ async def analyze_resume(file: UploadFile = File(...)):
                 "message": questions_data["error"],
                 "questions": questions_data.get("questions", []),
             }
+
+        # 3. Confidence & Tone insights from resume (same section as in video report)
+        communication = analyze_resume_communication(resume_text)
         
         return {
             "status": "success",
             "session_id": session_id,
             "questions": questions_data.get("questions", []),
+            "tone_analysis": communication.get("tone_analysis"),
+            "improvement_tip": communication.get("improvement_tip"),
+            "confidence_score": communication.get("confidence_rating"),
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

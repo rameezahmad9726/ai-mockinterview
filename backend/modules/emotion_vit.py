@@ -11,7 +11,8 @@ def analyze_emotions_vit(frames_dir):
     Lightning-fast emotion analysis using MobileNetV3.
     Processes video frames in batches for maximum throughput.
     """
-    print(f"😃 Loading optimized emotion model: {MODEL_NAME}")
+    # Avoid emojis in logs to prevent Windows console encoding issues
+    print(f"[INFO] Loading optimized emotion model: {MODEL_NAME}")
     
     # Auto-detect best available device
     device = -1 # Default to CPU
@@ -20,13 +21,13 @@ def analyze_emotions_vit(frames_dir):
     elif torch.backends.mps.is_available():
         device = "mps" # Support for Mac M1/M2 chips
     
-    print(f"⚙️ Using device: {device}")
+    print(f"[INFO] Using device: {device}")
     
     # Initialize classifier pipeline
     try:
         classifier = pipeline("image-classification", model=MODEL_NAME, device=device)
     except Exception as e:
-        print(f"⚠️ Could not load on {device}, falling back to CPU: {e}")
+        print(f"[WARN] Could not load on {device}, falling back to CPU: {e}")
         classifier = pipeline("image-classification", model=MODEL_NAME, device=-1)
 
     # Get all frames
@@ -41,7 +42,7 @@ def analyze_emotions_vit(frames_dir):
     emotion_history = []
     
     # Batch processing significantly speeds up inference
-    print(f"⚡ Processing {len(frames)} frames...")
+    print(f"[INFO] Processing {len(frames)} frames...")
     
     # Optimized batch size for average hardware
     batch_size = 16
@@ -54,7 +55,7 @@ def analyze_emotions_vit(frames_dir):
                 top_emotion = result[0]['label']
                 emotion_history.append(top_emotion)
         except Exception as e:
-            print(f"⚠️ Batch error at {i}: {e}")
+            print(f"[WARN] Batch error at {i}: {e}")
             # Fallback to single processing for this batch if it fails
             for p in batch_paths:
                 try:
@@ -71,8 +72,8 @@ def analyze_emotions_vit(frames_dir):
         counts[emo_key] = counts.get(emo_key, 0) + 1
 
     dominant = max(counts, key=counts.get) if counts else "Neutral"
-
-    print(f"✅ Emotion analysis complete. Dominant: {dominant}")
+    
+    print(f"[INFO] Emotion analysis complete. Dominant: {dominant}")
 
     return {
         "dominant_emotion": dominant,

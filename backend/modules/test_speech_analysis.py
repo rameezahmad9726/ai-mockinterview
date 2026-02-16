@@ -47,7 +47,7 @@ def create_sample_audio(duration=5, sample_rate=16000):
     wavfile.write(str(audio_path), sample_rate, audio)
     
     file_size_kb = audio_path.stat().st_size / 1024
-    print(f"✓ Created sample audio: {audio_path}")
+    print(f"[INFO] Created sample audio: {audio_path}")
     print(f"  Duration: {duration}s, Sample rate: {sample_rate}Hz")
     print(f"  File size: {file_size_kb:.1f} KB")
     
@@ -66,14 +66,14 @@ def test_speech_analyzer_initialization():
         assert analyzer._load_error is None, "Should have no load error at init"
         assert analyzer.model_name == "base", "Model name should be 'base'"
         
-        print("✓ SpeechAnalyzer initialized (lazy-load mode)")
+        print("[INFO] SpeechAnalyzer initialized (lazy-load mode)")
         print(f"  - model_name: {analyzer.model_name}")
         print(f"  - model: {analyzer.model}")
         print(f"  - _load_error: {analyzer._load_error}")
         
         return True, analyzer
     except Exception as e:
-        print(f"✗ Failed to initialize SpeechAnalyzer: {e}")
+        print(f"[ERROR] Failed to initialize SpeechAnalyzer: {e}")
         import traceback
         traceback.print_exc()
         return False, None
@@ -101,7 +101,7 @@ def test_speech_analysis(analyzer, audio_path):
         for key in expected_keys:
             assert key in result, f"Missing key in result: {key}"
         
-        print("✓ Analysis completed successfully")
+        print("[INFO] Analysis completed successfully")
         print(f"\n  Results:")
         print(f"  - Transcript: {result['transcript'][:100]}..." if len(result['transcript']) > 100 else f"  - Transcript: {result['transcript']}")
         print(f"  - Word count: {result['word_count']}")
@@ -112,7 +112,7 @@ def test_speech_analysis(analyzer, audio_path):
         
         return True, result
     except Exception as e:
-        print(f"✗ Speech analysis failed: {e}")
+        print(f"[ERROR] Speech analysis failed: {e}")
         import traceback
         traceback.print_exc()
         return False, None
@@ -124,20 +124,20 @@ def test_small_model():
     
     try:
         analyzer = SpeechAnalyzer(model_name="tiny")
-        print(f"✓ SpeechAnalyzer with 'tiny' model initialized")
+        print(f"[INFO] SpeechAnalyzer with 'tiny' model initialized")
         print(f"  Model name: {analyzer.model_name}")
         print(f"  (Model will load on first use)")
         
         # Try to load the model
         if analyzer._ensure_model_loaded():
-            print(f"✓ 'tiny' model loaded successfully")
+            print(f"[INFO] 'tiny' model loaded successfully")
             return True
         else:
-            print(f"⚠ Failed to load 'tiny' model: {analyzer._load_error}")
+            print(f"[WARN] Failed to load 'tiny' model: {analyzer._load_error}")
             return False
             
     except Exception as e:
-        print(f"✗ Failed with tiny model: {e}")
+        print(f"[ERROR] Failed with tiny model: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -156,14 +156,14 @@ def main():
     results["Initialization"] = success
     
     if not success or analyzer is None:
-        print("\n✗ Cannot proceed without successful initialization")
+        print("\n[ERROR] Cannot proceed without successful initialization")
         return 1
     
     # Test 2: Create sample audio
     try:
         audio_path = "./uploads/video2/audio/audio.wav"
     except Exception as e:
-        print(f"\n✗ Failed to create sample audio: {e}")
+        print(f"\n[ERROR] Failed to create sample audio: {e}")
         print("  (scipy may not be installed)")
         print("\n  To install scipy:")
         print("    pip install scipy")
@@ -194,18 +194,18 @@ def main():
     total = len(results)
     
     for test_name, result in results.items():
-        status = "✓ PASS" if result else "✗ FAIL"
+        status = "[PASS]" if result else "[FAIL]"
         print(f"{status}: {test_name}")
     
     print(f"\nTotal: {passed}/{total} tests passed")
     
     if passed >= 2:  # At least initialization should pass
-        print("\n✅ Speech analysis module is working!")
+        print("\n[INFO] Speech analysis module is working!")
         print("\nTo run full analysis, install scipy:")
         print("  pip install scipy")
         return 0
     else:
-        print(f"\n⚠️  {total - passed} test(s) failed")
+        print(f"\n[WARN] {total - passed} test(s) failed")
         return 1
 
 

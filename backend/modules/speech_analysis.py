@@ -30,7 +30,7 @@ class SpeechAnalyzer:
                 # Bypass SSL verification for model download
                 ssl._create_default_https_context = ssl._create_unverified_context
                 self.model = whisper.load_model(self.model_name)
-                print("✅ Whisper model loaded successfully")
+                print("[INFO] Whisper model loaded successfully")
             except Exception as e:
                 print(f"Failed to load Whisper model: {e}")
                 self.model = None
@@ -170,17 +170,26 @@ class SpeechAnalyzer:
             return {"error": f"Audio file does not exist: {audio_path}"}
 
         try:
-            print("Transcribing with Whisper...")
-            result = self.model.transcribe(str(audio_file))
+            print("Transcribing with Whisper (no external ffmpeg)...")
 
-            transcript = result.get("text", "").strip()
+            # Load audio with librosa (pure Python/Libsndfile, avoids ffmpeg dependency)
+            audio_data, sr = librosa.load(audio_path, sr=16000)
+            duration = librosa.get_duration(y=audio_data, sr=sr)
+
+            # Prepare mel spectrogram for Whisper directly
+            import numpy as np
+            import whisper
+
+            audio_np = whisper.pad_or_trim(audio_data.astype(np.float32))
+            mel = whisper.log_mel_spectrogram(audio_np).to(self.model.device)
+
+            options = whisper.DecodingOptions(fp16=False)
+            result = whisper.decode(self.model, mel, options)
+
+            transcript = (result.text or "").strip()
             print(f"DEBUG: RAW TRANSCRIPT: {transcript}")
             words = transcript.split()
             word_count = len(words)
-
-            # 🔥 TRUE duration using librosa (fixes your issue)
-            audio_data, sr = librosa.load(audio_path)
-            duration = librosa.get_duration(y=audio_data, sr=sr)
 
             # Speaking speed
             speaking_wpm = round((word_count / duration) * 60, 2) if duration > 0 else 0
