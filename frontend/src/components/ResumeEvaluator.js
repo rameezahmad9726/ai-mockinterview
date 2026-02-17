@@ -5,7 +5,6 @@ function ResumeEvaluator({ onStartInterview }) {
     const [file, setFile] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [questions, setQuestions] = useState(null);
-    const [toneInsights, setToneInsights] = useState(null); // { tone_analysis, improvement_tip, confidence_score }
     const [error, setError] = useState(null);
     const [analysisStage, setAnalysisStage] = useState(0);
 
@@ -22,7 +21,6 @@ function ResumeEvaluator({ onStartInterview }) {
             setFile(e.target.files[0]);
             setError(null);
             setQuestions(null);
-            setToneInsights(null);
         }
     };
 
@@ -32,7 +30,6 @@ function ResumeEvaluator({ onStartInterview }) {
         setIsAnalyzing(true);
         setError(null);
         setQuestions(null);
-        setToneInsights(null);
         setAnalysisStage(0);
 
         // Start cycling through stages for better UI feel
@@ -59,13 +56,6 @@ function ResumeEvaluator({ onStartInterview }) {
             }
 
             setQuestions(data.questions);
-            if (data.tone_analysis || data.improvement_tip) {
-                setToneInsights({
-                    tone_analysis: data.tone_analysis,
-                    improvement_tip: data.improvement_tip,
-                    confidence_score: data.confidence_score,
-                });
-            }
         } catch (err) {
             console.error('Error analyzing resume:', err);
             setError(err.message);
@@ -135,36 +125,6 @@ function ResumeEvaluator({ onStartInterview }) {
                     </div>
                 )}
             </div>
-
-            {/* Confidence & Tone Insights (same as Video Analysis report) */}
-            {toneInsights && (toneInsights.tone_analysis || toneInsights.improvement_tip) && (
-                <div className="bg-gradient-to-br from-indigo-900/40 to-slate-800 border border-indigo-500/30 rounded-xl p-6 shadow-xl relative overflow-hidden">
-                    <div className="absolute top-0 right-0 p-2 opacity-10">
-                        <span className="text-6xl">🛡️</span>
-                    </div>
-                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                        🛡️ Confidence & Tone Insights
-                        <span className="text-[10px] bg-indigo-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">AI Analysis</span>
-                    </h3>
-                    <div className="space-y-4">
-                        {toneInsights.tone_analysis && (
-                            <div className="bg-indigo-950/30 border border-indigo-500/20 rounded p-4">
-                                <p className="text-indigo-300 text-xs mb-1 uppercase font-semibold">Communication Style</p>
-                                <p className="text-white text-sm leading-relaxed">{toneInsights.tone_analysis}</p>
-                            </div>
-                        )}
-                        {toneInsights.improvement_tip && (
-                            <div className="bg-emerald-950/30 border border-emerald-500/20 rounded p-4">
-                                <p className="text-emerald-300 text-xs mb-1 uppercase font-semibold">Pro Improvement Tip</p>
-                                <div className="flex gap-2 items-start">
-                                    <span className="text-emerald-400 text-lg">💡</span>
-                                    <p className="text-emerald-50 text-sm italic">{toneInsights.improvement_tip}</p>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
 
             {/* Results Section */}
             {questions && (

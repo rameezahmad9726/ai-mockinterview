@@ -164,9 +164,16 @@ def analyze_resume_communication(resume_text: str) -> dict:
             )
             content = response["choices"][0]["message"]["content"]
 
+        # Safely strip markdown code blocks if present (avoid IndexError on malformed response)
         if content.startswith("```"):
-            content = content.split("```")[1].replace("json", "").strip()
-        data = json.loads(content.strip())
+            parts = content.split("```")
+            if len(parts) >= 2:
+                content = parts[1].replace("json", "").strip()
+            else:
+                content = content.strip()
+        else:
+            content = content.strip()
+        data = json.loads(content)
         return {
             "tone_analysis": data.get("tone_analysis"),
             "improvement_tip": data.get("improvement_tip"),

@@ -19,6 +19,7 @@ class SpeechAnalyzer:
     def __init__(self, model_name="tiny"):
         self.model_name = model_name
         self.model = None  # Lazy load on first use
+        self._load_error = None  # Set if model load fails (for tests and introspection)
 
     def _ensure_loaded(self):
         """Load Whisper model on first use (lazy loading)."""
@@ -30,10 +31,17 @@ class SpeechAnalyzer:
                 # Bypass SSL verification for model download
                 ssl._create_default_https_context = ssl._create_unverified_context
                 self.model = whisper.load_model(self.model_name)
+                self._load_error = None
                 print("[INFO] Whisper model loaded successfully")
             except Exception as e:
                 print(f"Failed to load Whisper model: {e}")
+                self._load_error = e
                 self.model = None
+
+    def _ensure_model_loaded(self):
+        """Ensure the Whisper model is loaded. Returns True if loaded, False otherwise (for tests)."""
+        self._ensure_loaded()
+        return self.model is not None
 
     def _format_transcript_with_speakers(self, transcript, questions=None):
         """
