@@ -4,6 +4,16 @@ import numpy as np
 import os
 import glob
 
+# Cached analyzer (load once, reuse)
+_body_analyzer = None
+
+def _get_body_analyzer():
+    """Get or create cached BodyLanguageAnalyzer for reuse."""
+    global _body_analyzer
+    if _body_analyzer is None:
+        _body_analyzer = BodyLanguageAnalyzer()
+    return _body_analyzer
+
 
 class BodyLanguageAnalyzer:
     def __init__(self):
@@ -33,8 +43,9 @@ class BodyLanguageAnalyzer:
 
         return angle
 
-    def analyze_video(self, frames_dir, max_frames=500):
-        frames = sorted(glob.glob(os.path.join(frames_dir, "*.jpg")))
+    def analyze_video(self, frames_dir, max_frames=500, subsample_step=2):
+        all_frames = sorted(glob.glob(os.path.join(frames_dir, "*.jpg")))
+        frames = all_frames[::subsample_step] if subsample_step > 1 else all_frames
 
         posture_scores = []
         movement_scores = []

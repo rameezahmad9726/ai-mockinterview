@@ -42,7 +42,7 @@ const LiveInterview = ({ questions, sessionId }) => {
 
     useEffect(() => {
         if (questions && questions.length > 0 && sessionId) {
-            preloadTtsSequentially();
+            preloadTtsParallel();
         }
         return () => {
             if (stream) {
@@ -56,28 +56,48 @@ const LiveInterview = ({ questions, sessionId }) => {
         };
     }, [questions, sessionId]);
 
-    const preloadTtsSequentially = async () => {
+    const preloadTtsParallel = async () => {
         setIsPreloading(true);
         try {
-            const firstUrl = await fetchTts(questions[0].question, 0);
-            if (firstUrl) {
-                setTtsUrls(prev => ({ ...prev, 0: firstUrl }));
+            const response = await fetch('http://localhost:8000/generate-tts-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    questions: questions.map((q, i) => ({
+                        question: typeof q === 'object' ? q.question : q,
+                        index: i
+                    }))
+                })
+            });
+            const data = await response.json();
+            if (!data.urls || data.urls.length === 0) {
                 setIsFirstQuestionReady(true);
+                setIsPreloading(false);
+                return;
             }
-        } catch (err) {
-            console.error("Failed to preload first question:", err);
-            setIsFirstQuestionReady(true);
-        }
-
-        for (let i = 1; i < questions.length; i++) {
-            try {
-                const url = await fetchTts(questions[i].question, i);
-                if (url) {
-                    setTtsUrls(prev => ({ ...prev, [i]: url }));
+            const urls = data.urls;
+            const blobPromises = urls.map(async (u) => {
+                if (!u.url) return { index: u.index, blobUrl: null };
+                try {
+                    const res = await fetch(u.url);
+                    const blob = await res.blob();
+                    return { index: u.index, blobUrl: URL.createObjectURL(blob) };
+                } catch (e) {
+                    console.error(`Failed to fetch TTS for Q${u.index}:`, e);
+                    return { index: u.index, blobUrl: null };
                 }
-            } catch (err) {
-                console.error(`Failed to preload TTS for Q${i}:`, err);
-            }
+            });
+            const results = await Promise.all(blobPromises);
+            const nextUrls = {};
+            results.forEach(({ index, blobUrl }) => {
+                if (blobUrl) nextUrls[index] = blobUrl;
+            });
+            setTtsUrls(prev => ({ ...prev, ...nextUrls }));
+            setIsFirstQuestionReady(!!nextUrls[0]);
+        } catch (err) {
+            console.error("Failed to preload TTS batch:", err);
+            setIsFirstQuestionReady(true);
         }
         setIsPreloading(false);
     };

@@ -6,32 +6,39 @@ from transformers import pipeline
 # Switch to a much faster MobileNetV3-based model
 MODEL_NAME = "dima806/facial_emotions_image_detection"
 
-def analyze_emotions_vit(frames_dir):
-    """
-    Lightning-fast emotion analysis using MobileNetV3.
-    Processes video frames in batches for maximum throughput.
-    """
-    # Avoid emojis in logs to prevent Windows console encoding issues
-    print(f"[INFO] Loading optimized emotion model: {MODEL_NAME}")
-    
-    # Auto-detect best available device
-    device = -1 # Default to CPU
+# Cached classifier (load once, reuse across analyses)
+_classifier = None
+_classifier_device = None
+
+def _get_emotion_classifier():
+    """Get or create cached emotion classifier for reuse."""
+    global _classifier, _classifier_device
+    if _classifier is not None:
+        return _classifier
+    print(f"[INFO] Loading emotion model: {MODEL_NAME}")
+    device = -1
     if torch.cuda.is_available():
         device = 0
     elif torch.backends.mps.is_available():
-        device = "mps" # Support for Mac M1/M2 chips
-    
+        device = "mps"
     print(f"[INFO] Using device: {device}")
-    
-    # Initialize classifier pipeline
     try:
-        classifier = pipeline("image-classification", model=MODEL_NAME, device=device)
+        _classifier = pipeline("image-classification", model=MODEL_NAME, device=device)
     except Exception as e:
         print(f"[WARN] Could not load on {device}, falling back to CPU: {e}")
-        classifier = pipeline("image-classification", model=MODEL_NAME, device=-1)
+        _classifier = pipeline("image-classification", model=MODEL_NAME, device=-1)
+    return _classifier
 
-    # Get all frames
-    frames = sorted(list(Path(frames_dir).glob("*.jpg")))
+def analyze_emotions_vit(frames_dir, subsample_step=2):
+    """
+    Lightning-fast emotion analysis. Uses cached model. Processes frames in batches.
+    subsample_step: process every Nth frame (2 = every 2nd) for faster analysis.
+    """
+    classifier = _get_emotion_classifier()
+
+    # Get all frames, optionally subsample for speed
+    all_frames = sorted(list(Path(frames_dir).glob("*.jpg")))
+    frames = all_frames[::subsample_step] if subsample_step > 1 else all_frames
     if not frames:
         return {
             "dominant_emotion": "Neutral", 

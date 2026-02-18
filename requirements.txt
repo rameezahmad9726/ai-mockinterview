@@ -14,6 +14,7 @@ numpy
 openai-whisper
 librosa
 soundfile
+imageio-ffmpeg
 # Resume Analysis
 pdfplumber
 python-docx

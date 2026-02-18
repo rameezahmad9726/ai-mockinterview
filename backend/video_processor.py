@@ -3,6 +3,7 @@ import cv2
 import tempfile
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from modules.report_builder import save_html_report
 from modules.emotion_vit import analyze_emotions_vit
@@ -43,9 +44,10 @@ def extract_frames(video_path, output_dir, fps=1):
             break
             
         if current_frame % interval == 0:
-            # Resize for speed
+            # Resize for speed; lower JPEG quality (85) for faster I/O
             frame_small = cv2.resize(frame, (320, 240))
-            cv2.imwrite(os.path.join(output_dir, f"frame_{saved}.jpg"), frame_small)
+            path = os.path.join(output_dir, f"frame_{saved}.jpg")
+            cv2.imwrite(path, frame_small, [cv2.IMWRITE_JPEG_QUALITY, 85])
             saved += 1
             
         current_frame += 1
@@ -59,14 +61,22 @@ def run_emotion_analysis(frames_dir):
     return analyze_emotions_vit(frames_dir)
 
 
-def run_body_language_analysis(frames_dir):
-    analyzer = BodyLanguageAnalyzer()
-    return analyzer.analyze_video(frames_dir)
+def run_body_language_analysis(frames_dir, subsample_step=2):
+    from modules.body_language import _get_body_analyzer
+    return _get_body_analyzer().analyze_video(frames_dir, subsample_step=subsample_step)
 
+
+# Shared SpeechAnalyzer (reuse across analyses)
+_speech_analyzer = None
+
+def _get_speech_analyzer():
+    global _speech_analyzer
+    if _speech_analyzer is None:
+        _speech_analyzer = SpeechAnalyzer()
+    return _speech_analyzer
 
 def run_speech_analysis(audio_path, questions=None):
-    analyzer = SpeechAnalyzer()
-    return analyzer.analyze_audio(audio_path, questions)
+    return _get_speech_analyzer().analyze_audio(audio_path, questions)
 
 
 def build_final_report(emotion, body, speech, audio_path):
@@ -101,40 +111,67 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
     frames_dir.mkdir(exist_ok=True)
     audio_dir.mkdir(exist_ok=True)
 
-    update_progress(10, "Extracting video frames...")
-    print("[STEP] Extracting frames...")
-    extract_frames(video_path, str(frames_dir))
+    # Parallel extraction: frames + audio
+    update_progress(10, "Extracting frames and audio...")
+    print("[STEP] Extracting frames and audio in parallel...")
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_frames = ex.submit(extract_frames, video_path, str(frames_dir))
+        f_audio = ex.submit(extract_audio, video_path, audio_dir)
+        f_frames.result()
+        audio_path = f_audio.result()
+    update_progress(35, "Extraction complete, analyzing...")
 
-    update_progress(25, "Extracting audio track...")
-    print("[STEP] Extracting audio...")
-    audio_path = extract_audio(video_path, audio_dir)
+    # Load speech model on main thread first (Whisper can fail when loaded from worker threads)
+    _get_speech_analyzer()._ensure_model_loaded()
 
-    # -------------------------
-    # Handle missing audio
-    # -------------------------
-    if not audio_path or not Path(audio_path).exists():
-        print("[WARN] No audio extracted — skipping speech analysis")
-        update_progress(40, "No audio found, skipping transcription...")
-        speech = {
-            "error": "No audio extracted",
-            "transcript": "",
-            "word_count": 0,
-            "speaking_speed_wpm": 0,
-            "clarity_score": 0,
-            "confidence_score": 0,
+    # Parallel analysis: speech, emotion, body (all independent after extraction)
+    speech = None
+    emotion_data = None
+    body_data = None
+
+    def run_speech():
+        if not audio_path or not Path(audio_path).exists():
+            return {
+                "error": "No audio extracted",
+                "transcript": "",
+                "word_count": 0,
+                "speaking_speed_wpm": 0,
+                "clarity_score": 0,
+                "confidence_score": 0,
+            }
+        return run_speech_analysis(audio_path, questions)
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futures = {
+            ex.submit(run_speech): "speech",
+            ex.submit(run_emotion_analysis, str(frames_dir)): "emotion",
+            ex.submit(run_body_language_analysis, str(frames_dir)): "body",
         }
-    else:
-        update_progress(40, "Running speech-to-text and AI diarization...")
-        print("[STEP] Running speech analysis...")
-        speech = run_speech_analysis(audio_path, questions)
+        for fut in as_completed(futures):
+            key = futures[fut]
+            try:
+                result = fut.result()
+                if key == "speech":
+                    speech = result
+                elif key == "emotion":
+                    emotion_data = result
+                else:
+                    body_data = result
+            except Exception as e:
+                print(f"[ERROR] {key} failed: {e}")
+                if key == "speech":
+                    speech = {"error": str(e), "transcript": "", "word_count": 0, "speaking_speed_wpm": 0, "clarity_score": 0, "confidence_score": 0}
+                elif key == "emotion":
+                    emotion_data = {"dominant_emotion": "Neutral", "emotion_counts": {}, "frames_analyzed": 0}
+                else:
+                    body_data = {"posture_score": 0, "movement_score": 0, "gesture_label": "Analysis failed"}
 
-    update_progress(60, "Analyzing facial expressions and emotions...")
-    print("[STEP] Running emotion analysis...")
-    emotion_data = run_emotion_analysis(str(frames_dir))
-
-    update_progress(80, "Analyzing body language and posture...")
-    print("[STEP] Running body language analysis...")
-    body_data = run_body_language_analysis(str(frames_dir))
+    if speech is None:
+        speech = {"error": "Speech analysis failed", "transcript": "", "word_count": 0, "speaking_speed_wpm": 0, "clarity_score": 0, "confidence_score": 0}
+    if emotion_data is None:
+        emotion_data = {"dominant_emotion": "Neutral", "emotion_counts": {}, "frames_analyzed": 0}
+    if body_data is None:
+        body_data = {"posture_score": 0, "movement_score": 0, "gesture_label": "Analysis failed"}
 
     update_progress(90, "Generating final report and insights...")
     print("[STEP] Creating final report...")

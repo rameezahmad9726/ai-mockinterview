@@ -12,7 +12,7 @@ import os
 from video_processor import process_video
 from modules.resume_parser import parse_resume
 from modules.question_generator import generate_questions
-from modules.tts import generate_speech
+from modules.tts import generate_speech, generate_speech_batch
 
 app = FastAPI()
 
@@ -148,6 +148,26 @@ async def tts_endpoint(data: dict):
 
     filename = Path(path).name
     return {"url": f"http://localhost:8000/tts/{session_id}/{filename}"}
+
+
+@app.post("/generate-tts-batch")
+async def tts_batch_endpoint(data: dict):
+    """
+    Pre-generate TTS for all questions in parallel.
+    Expected data: {"session_id": "...", "questions": [{"question": "...", "index": 0}, ...]}
+    """
+    session_id = data.get("session_id")
+    questions_raw = data.get("questions", [])
+
+    if not session_id or not questions_raw:
+        raise HTTPException(status_code=400, detail="Missing session_id or questions")
+
+    questions = [
+        {"text": q.get("question", q.get("text", "")), "index": q.get("index", i)}
+        for i, q in enumerate(questions_raw)
+    ]
+    results = generate_speech_batch(session_id, questions)
+    return {"urls": results}
 
 
 @app.get("/tts/{session_id}/{filename}")
