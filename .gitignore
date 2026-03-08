@@ -153,6 +153,7 @@ env/
 
 # Backend specific
 backend/uploads/
+backend/.mediapipe_models/
 backend/reports/
 backend/*.log
 backend/test_video.mp4

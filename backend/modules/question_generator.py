@@ -1,7 +1,13 @@
 import json
 import os
 import traceback
+from pathlib import Path
 from dotenv import load_dotenv
+
+# Load .env from backend directory so the key is found regardless of cwd
+_backend_dir = Path(__file__).resolve().parent.parent
+load_dotenv(_backend_dir / ".env")
+load_dotenv()
 
 # The OpenAI Python SDK renamed the client in v1.x. We import cautiously so
 # older 0.x installs still work.
@@ -10,8 +16,6 @@ try:  # pragma: no cover - defensive import
 except Exception:  # pragma: no cover
     OpenAI = None
 import openai  # keeps 0.x fallback available
-
-load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # Allow overriding model via env; default to a modern lightweight model.

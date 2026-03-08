@@ -9,7 +9,6 @@ import uuid
 import shutil
 import os
 
-from video_processor import process_video
 from modules.resume_parser import parse_resume
 from modules.question_generator import generate_questions
 from modules.tts import generate_speech, generate_speech_batch
@@ -39,6 +38,8 @@ async def get_analysis_status(session_id: str):
 
 def run_analysis_task(video_path, session_id, parsed_questions):
     try:
+        from video_processor import process_video
+
         def on_progress(percent, message):
             progress_store[session_id]["progress"] = percent
             progress_store[session_id]["status"] = message

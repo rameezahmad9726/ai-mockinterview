@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowUpTrayIcon, DocumentTextIcon, ClipboardDocumentCheckIcon, VideoCameraIcon } from '@heroicons/react/24/outline';
+import { API_BASE } from '../api';
 
 function ResumeEvaluator({ onStartInterview }) {
     const [file, setFile] = useState(null);
@@ -41,7 +42,7 @@ function ResumeEvaluator({ onStartInterview }) {
         formData.append('file', file);
 
         try {
-            const response = await fetch('http://localhost:8000/analyze-resume', {
+            const response = await fetch(`${API_BASE}/analyze-resume`, {
                 method: 'POST',
                 body: formData,
             });

@@ -65,9 +65,14 @@ def build_html_report(report: dict) -> str:
     gesture_label = _safe_get(summary, "gesture_label", "N/A")
     posture_score = _safe_get(summary, "posture_score", "N/A")
     movement_score = _safe_get(summary, "movement_score", "N/A")
-    speaking_speed = _safe_get(summary, "speaking_speed_wpm", "N/A")
-    clarity_score = _safe_get(summary, "clarity_score", "N/A")
-    confidence_score = _safe_get(summary, "confidence_score", "N/A")
+    # When insufficient candidate speech, these can be None - show N/A
+    _sw = summary.get("speaking_speed_wpm")
+    speaking_speed = "N/A" if _sw is None else _sw
+    _cs = summary.get("clarity_score")
+    clarity_score = "N/A" if _cs is None else _cs
+    _cf = summary.get("confidence_score")
+    confidence_score = "N/A" if _cf is None else _cf
+    recommendation = _safe_get(summary, "recommendation", {})
 
     frames_analyzed = _safe_get(emotion, "frames_analyzed", 0)
     emotion_counts = _safe_get(emotion, "emotion_counts", {})
@@ -93,6 +98,50 @@ def build_html_report(report: dict) -> str:
 
     # Pretty JSON block (optional, for debugging)
     pretty_json = html.escape(json.dumps(report, indent=2, ensure_ascii=False))
+
+    # Build detailed recommendation HTML
+    recommendation_html = ""
+    if recommendation.get("label"):
+        rec_bg = "#dcfce7" if recommendation.get("recommended") else "#fef3c7"
+        rec_border = "#22c55e" if recommendation.get("recommended") else "#f59e0b"
+        recommendation_html = f'<div class="card" style="margin-bottom: 24px; padding: 20px; background: {rec_bg}; border: 2px solid {rec_border}; border-radius: 12px;">'
+        recommendation_html += f'<strong style="font-size: 18px;">{"✅ Recommended" if recommendation.get("recommended") else "⚠️ Not Recommended"}</strong>'
+        if recommendation.get("summary"):
+            recommendation_html += f'<p style="margin-top: 8px; color: #374151; font-weight: 500;">{html.escape(recommendation.get("summary", ""))}</p>'
+        if recommendation.get("reason"):
+            recommendation_html += f'<p style="margin-top: 4px; color: #4b5563; font-size: 14px;">{html.escape(recommendation.get("reason", ""))}</p>'
+        strengths = recommendation.get("strengths") or []
+        if strengths:
+            recommendation_html += '<h4 style="margin-top: 16px; font-size: 12px; color: #059669; text-transform: uppercase; letter-spacing: 0.05em;">Strengths</h4><ul style="margin: 8px 0 0 16px; padding: 0;">'
+            for s in strengths:
+                score_str = ""
+                if s.get("score") is not None:
+                    if s.get("metric") == "Speaking pace":
+                        score_str = f" ({s['score']:.0f} WPM)"
+                    elif s.get("metric") == "Filler words":
+                        score_str = f" ({s['score']} detected)"
+                    else:
+                        score_str = f" ({s['score']}/10)"
+                recommendation_html += f'<li style="margin-bottom: 6px; color: #374151;"><strong>{html.escape(s.get("metric", ""))}</strong>{score_str}: {html.escape(s.get("feedback", ""))}</li>'
+            recommendation_html += "</ul>"
+        areas = recommendation.get("areas_to_improve") or []
+        if areas:
+            recommendation_html += '<h4 style="margin-top: 16px; font-size: 12px; color: #d97706; text-transform: uppercase; letter-spacing: 0.05em;">Areas to Improve</h4><ul style="margin: 8px 0 0 16px; padding: 0;">'
+            for a in areas:
+                score_str = ""
+                if a.get("score") is not None:
+                    if a.get("metric") == "Speaking pace":
+                        score_str = f" ({a['score']:.0f} WPM)"
+                    elif a.get("metric") == "Filler words":
+                        score_str = f" ({a['score']} detected)"
+                    else:
+                        score_str = f" ({a['score']}/10)"
+                recommendation_html += f'<li style="margin-bottom: 8px; color: #374151;"><strong>{html.escape(a.get("metric", ""))}</strong>{score_str}: {html.escape(a.get("feedback", ""))}'
+                if a.get("suggestion"):
+                    recommendation_html += f'<p style="margin: 4px 0 0 12px; font-size: 13px; color: #6b7280; font-style: italic; border-left: 2px solid #f59e0b; padding-left: 8px;">💡 {html.escape(a.get("suggestion", ""))}</p>'
+                recommendation_html += "</li>"
+            recommendation_html += "</ul>"
+        recommendation_html += "</div>"
 
     html_doc = f"""<!DOCTYPE html>
 <html lang="en">
@@ -242,6 +291,9 @@ def build_html_report(report: dict) -> str:
         Generated on <strong>{created_at}</strong>
     </div>
 
+    <!-- Recommendation -->
+    {recommendation_html}
+
     <!-- Overview -->
     <h2>Overview</h2>
     <div class="grid">
@@ -263,7 +315,7 @@ def build_html_report(report: dict) -> str:
         </div>
         <div class="card">
             <strong>Speaking Speed</strong>
-            <span>{speaking_speed} WPM</span>
+            <span>{speaking_speed if speaking_speed == "N/A" else f"{speaking_speed} WPM"}</span>
         </div>
         <div class="card">
             <strong>Clarity / Confidence</strong>
@@ -333,7 +385,7 @@ def build_html_report(report: dict) -> str:
         </div>
         <div class="card">
             <strong>Speaking Speed</strong>
-            <span>{speaking_speed} WPM</span>
+            <span>{speaking_speed if speaking_speed == "N/A" else f"{speaking_speed} WPM"}</span>
         </div>
         <div class="card">
             <strong>Filler Words</strong>

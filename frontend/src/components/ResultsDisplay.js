@@ -8,8 +8,101 @@ export default function ResultsDisplay({ results }) {
   const speech = results?.speech_analysis || {};
   const summary = results?.final_summary || {};
 
+  const recommendation = summary?.recommendation || {};
+
   return (
     <div className="space-y-6">
+      {/* Recommendation Section - Detailed */}
+      {recommendation.label && (
+        <div className={`rounded-lg p-6 shadow-xl border-2 ${
+          recommendation.recommended
+            ? 'bg-gradient-to-br from-emerald-900/60 to-green-900/40 border-emerald-500/50'
+            : 'bg-gradient-to-br from-amber-900/60 to-orange-900/40 border-amber-500/50'
+        }`}>
+          <div className="flex items-start gap-4">
+            <span className="text-5xl flex-shrink-0">
+              {recommendation.recommended ? '✅' : '⚠️'}
+            </span>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-2xl font-bold text-white">
+                {recommendation.recommended ? 'Recommended' : 'Not Recommended'}
+              </h2>
+              {recommendation.summary && (
+                <p className="text-slate-200 text-sm mt-1 font-medium">
+                  {recommendation.summary}
+                </p>
+              )}
+              {recommendation.reason && (
+                <p className="text-slate-300 text-sm mt-2">
+                  {recommendation.reason}
+                </p>
+              )}
+
+              {/* Strengths */}
+              {recommendation.strengths && recommendation.strengths.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="text-emerald-300 text-xs font-bold uppercase tracking-wider mb-2">Strengths</h4>
+                  <ul className="space-y-2">
+                    {recommendation.strengths.map((s, i) => (
+                      <li key={i} className="flex gap-2 text-sm">
+                        <span className="text-emerald-400">✓</span>
+                        <span className="text-slate-200">
+                          <strong>{s.metric}</strong>
+                          {s.score != null && s.metric === 'Speaking pace' && (
+                            <span className="text-slate-400 ml-1">({s.score} WPM)</span>
+                          )}
+                          {s.score != null && s.metric === 'Filler words' && (
+                            <span className="text-slate-400 ml-1">({s.score} detected)</span>
+                          )}
+                          {s.score != null && !['Speaking pace', 'Filler words'].includes(s.metric) && (
+                            <span className="text-slate-400 ml-1">({s.score}/10)</span>
+                          )}
+                          : {s.feedback}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Areas to Improve */}
+              {recommendation.areas_to_improve && recommendation.areas_to_improve.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="text-amber-300 text-xs font-bold uppercase tracking-wider mb-2">Areas to Improve</h4>
+                  <ul className="space-y-3">
+                    {recommendation.areas_to_improve.map((a, i) => (
+                      <li key={i} className="flex gap-2 text-sm">
+                        <span className="text-amber-400 flex-shrink-0">•</span>
+                        <div>
+                          <span className="text-slate-200">
+                            <strong>{a.metric}</strong>
+                            {a.score != null && a.metric === 'Speaking pace' && (
+                              <span className="text-slate-400 ml-1">({a.score} WPM)</span>
+                            )}
+                            {a.metric === 'Filler words' && a.score != null && (
+                              <span className="text-slate-400 ml-1">({a.score} detected)</span>
+                            )}
+                            {a.score != null && !['Speaking pace', 'Filler words'].includes(a.metric) && (
+                              <span className="text-slate-400 ml-1">({a.score}/10)</span>
+                            )}
+                            : {a.feedback}
+                          </span>
+                          {a.suggestion && (
+                            <p className="text-amber-100/90 text-xs mt-1 italic pl-4 border-l-2 border-amber-500/40">
+                              💡 {a.suggestion}
+                            </p>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Overall Summary */}
       <div className="bg-gradient-to-br from-slate-800 to-slate-700 border border-slate-700 rounded-lg p-6 shadow-xl">
         <h2 className="text-2xl font-bold text-white mb-4">📊 Analysis Summary</h2>
@@ -36,13 +129,13 @@ export default function ResultsDisplay({ results }) {
           <ScoreCard
             icon="💬"
             label="Clarity Score"
-            value={`${summary.clarity_score || 0}/10`}
+            value={summary.clarity_score != null ? `${summary.clarity_score}/10` : 'N/A'}
             color="from-orange-600 to-red-600"
           />
           <ScoreCard
             icon="🛡️"
             label="Confidence"
-            value={`${summary.confidence_score || 0}/10`}
+            value={summary.confidence_score != null ? `${summary.confidence_score}/10` : 'N/A'}
             color="from-indigo-600 to-purple-600"
           />
         </div>
@@ -95,7 +188,11 @@ export default function ResultsDisplay({ results }) {
             </div>
             <div className="bg-slate-700 rounded p-3">
               <p className="text-slate-400 text-xs">Speaking Speed</p>
-              <p className="text-white font-bold text-lg">{speech.speaking_speed_wpm || 0} WPM</p>
+              <p className="text-white font-bold text-lg">
+                {(summary.insufficient_candidate_speech || speech.insufficient_candidate_speech)
+                  ? 'N/A'
+                  : `${speech.speaking_speed_wpm || 0} WPM`}
+              </p>
             </div>
             <div className="bg-slate-700 rounded p-3">
               <p className="text-slate-400 text-xs">Filler Words</p>

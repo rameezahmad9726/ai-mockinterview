@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './App.css';
 import VideoUpload from './components/VideoUpload';
 import ProcessingStatus from './components/ProcessingStatus';
 import ResultsDisplay from './components/ResultsDisplay';
 import ResumeEvaluator from './components/ResumeEvaluator';
 import LiveInterview from './components/LiveInterview';
+import { API_BASE } from './api';
 
 function App() {
   const [activeTab, setActiveTab] = useState('video'); // 'video' | 'resume' | 'live'
@@ -14,6 +15,25 @@ function App() {
   const [error, setError] = useState(null);
   const [interviewQuestions, setInterviewQuestions] = useState([]);
   const [sessionId, setSessionId] = useState(`session_${Date.now()}`);
+  const [backendReachable, setBackendReachable] = useState(null); // null = checking, true/false = result
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await fetch(API_BASE);
+        if (!cancelled) setBackendReachable(res.ok);
+      } catch {
+        if (!cancelled) setBackendReachable(false);
+      }
+    };
+    check();
+    const interval = setInterval(check, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   const handleStartInterview = (questions) => {
     setInterviewQuestions(questions);
@@ -23,7 +43,7 @@ function App() {
 
   const pollAnalysisStatus = async (sid) => {
     try {
-      const response = await fetch(`http://localhost:8000/analysis-status/${sid}`);
+      const response = await fetch(`${API_BASE}/analysis-status/${sid}`);
       const data = await response.json();
 
       if (data.status === "error") {
@@ -60,7 +80,7 @@ function App() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('http://localhost:8000/analyze', {
+      const response = await fetch(`${API_BASE}/analyze`, {
         method: 'POST',
         body: formData,
       });
@@ -98,7 +118,14 @@ function App() {
             </div>
             <div className="text-right">
               <p className="text-slate-300 text-sm">
-                Backend: <span className="text-green-400">●</span> Active
+                Backend:{' '}
+                {backendReachable === null ? (
+                  <span className="text-slate-500">● Checking...</span>
+                ) : backendReachable ? (
+                  <span className="text-green-400">● Active</span>
+                ) : (
+                  <span className="text-amber-400" title="Start the backend: cd backend; python main.py">● Unreachable</span>
+                )}
               </p>
             </div>
           </div>
@@ -174,6 +201,11 @@ function App() {
         ) : activeTab === 'resume' ? (
           /* Resume Evaluator Tab */
           <div className="max-w-3xl mx-auto">
+            {backendReachable === false && (
+              <div className="mb-6 p-4 bg-amber-900/30 border border-amber-700 rounded-lg text-amber-200 text-sm">
+                Backend is not reachable. Start it with: <code className="bg-slate-800 px-2 py-1 rounded">cd backend; python main.py</code> (from project root in PowerShell)
+              </div>
+            )}
             <ResumeEvaluator onStartInterview={handleStartInterview} />
           </div>
         ) : (

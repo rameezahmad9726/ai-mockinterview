@@ -7,8 +7,8 @@ opencv-python-headless
 torch
 transformers
 Pillow
-# Pinning mediapipe and protobuf to avoid conflict loops
-mediapipe==0.10.9
+# Body analysis uses PoseLandmarker (mp.tasks.vision). Requires mediapipe>=0.10.31 (0.10.30 has "function free not found" on Windows).
+mediapipe>=0.10.31
 protobuf==3.20.3
 numpy
 openai-whisper

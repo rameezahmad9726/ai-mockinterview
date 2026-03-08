@@ -59,44 +59,75 @@ const LiveInterview = ({ questions, sessionId }) => {
     const preloadTtsParallel = async () => {
         setIsPreloading(true);
         try {
-            const response = await fetch('http://localhost:8000/generate-tts-batch', {
+            const qList = questions.map((q, i) => ({
+                question: typeof q === 'object' ? q.question : q,
+                index: i
+            }));
+
+            // Prioritize Q0: generate it first so user can start quickly
+            const q0 = qList[0];
+            const q0Res = await fetch('http://localhost:8000/generate-tts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    text: q0.question,
                     session_id: sessionId,
-                    questions: questions.map((q, i) => ({
-                        question: typeof q === 'object' ? q.question : q,
-                        index: i
-                    }))
+                    index: 0
                 })
             });
-            const data = await response.json();
-            if (!data.urls || data.urls.length === 0) {
-                setIsFirstQuestionReady(true);
-                setIsPreloading(false);
-                return;
-            }
-            const urls = data.urls;
-            const blobPromises = urls.map(async (u) => {
-                if (!u.url) return { index: u.index, blobUrl: null };
+            const q0Data = await q0Res.json();
+            if (q0Data?.url) {
                 try {
-                    const res = await fetch(u.url);
-                    const blob = await res.blob();
-                    return { index: u.index, blobUrl: URL.createObjectURL(blob) };
+                    const blobRes = await fetch(q0Data.url);
+                    const blob = await blobRes.blob();
+                    const blobUrl = URL.createObjectURL(blob);
+                    setTtsUrls(prev => ({ ...prev, 0: blobUrl }));
+                    setIsFirstQuestionReady(true);
                 } catch (e) {
-                    console.error(`Failed to fetch TTS for Q${u.index}:`, e);
-                    return { index: u.index, blobUrl: null };
+                    console.error('Failed to fetch Q0 TTS:', e);
+                    setIsFirstQuestionReady(true);
                 }
-            });
-            const results = await Promise.all(blobPromises);
-            const nextUrls = {};
-            results.forEach(({ index, blobUrl }) => {
-                if (blobUrl) nextUrls[index] = blobUrl;
-            });
-            setTtsUrls(prev => ({ ...prev, ...nextUrls }));
-            setIsFirstQuestionReady(!!nextUrls[0]);
+            } else {
+                setIsFirstQuestionReady(true);
+            }
+
+            // Generate remaining questions in background (don't block)
+            if (qList.length > 1) {
+                fetch('http://localhost:8000/generate-tts-batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        questions: qList.slice(1)
+                    })
+                })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (!data.urls?.length) return;
+                        return Promise.all(data.urls.map(async (u) => {
+                            if (!u.url) return { index: u.index, blobUrl: null };
+                            try {
+                                const res = await fetch(u.url);
+                                const blob = await res.blob();
+                                return { index: u.index, blobUrl: URL.createObjectURL(blob) };
+                            } catch (e) {
+                                console.error(`Failed to fetch TTS for Q${u.index}:`, e);
+                                return { index: u.index, blobUrl: null };
+                            }
+                        }));
+                    })
+                    .then(results => {
+                        if (!results) return;
+                        const nextUrls = {};
+                        results.forEach(({ index, blobUrl }) => {
+                            if (blobUrl) nextUrls[index] = blobUrl;
+                        });
+                        setTtsUrls(prev => ({ ...prev, ...nextUrls }));
+                    })
+                    .catch(err => console.error('Background TTS batch failed:', err));
+            }
         } catch (err) {
-            console.error("Failed to preload TTS batch:", err);
+            console.error("Failed to preload TTS:", err);
             setIsFirstQuestionReady(true);
         }
         setIsPreloading(false);
@@ -479,7 +510,7 @@ const LiveInterview = ({ questions, sessionId }) => {
                                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                         </svg>
-                                        Preparing Interview...
+                                        {isPreloading ? 'Generating first question audio...' : 'Preparing Interview...'}
                                     </>
                                 ) : (
                                     <>
