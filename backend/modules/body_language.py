@@ -5,6 +5,8 @@ import os
 import glob
 from pathlib import Path
 
+from modules.behavior_analysis import posture_score_to_label
+
 # Try legacy mp.solutions.pose first (mediapipe < 0.10.28)
 _pose_module = None
 try:
@@ -91,6 +93,7 @@ class _BodyStub:
             "gesture_label": "Pose unavailable (MediaPipe Pose not available)",
             "missing_frames": 0,
             "frames_processed": 0,
+            "posture_per_frame": [],
         }
 
 
@@ -146,6 +149,7 @@ def _analyze_frames_common(analyzer, frames_dir, max_frames, subsample_step):
             "gesture_label": msg,
             "missing_frames": 0,
             "frames_processed": 0,
+            "posture_per_frame": [],
         }
     try:
         frames_dir = str(frames_dir)
@@ -163,6 +167,7 @@ def _analyze_frames_common(analyzer, frames_dir, max_frames, subsample_step):
     try:
         posture_scores = []
         movement_scores = []
+        posture_per_frame = []
         missing_frames = 0
         prev_left_hand = None
         prev_right_hand = None
@@ -189,7 +194,15 @@ def _analyze_frames_common(analyzer, frames_dir, max_frames, subsample_step):
             right_wrist = landmarks[16]
 
             shoulder_diff = abs(left_shoulder.y - right_shoulder.y)
-            posture_scores.append(1 - min(shoulder_diff, 1.0))
+            posture_unit = 1 - min(shoulder_diff, 1.0)
+            posture_scores.append(posture_unit)
+            score_10 = round(float(posture_unit * 10), 1)
+            posture_per_frame.append(
+                {
+                    "path": os.path.normpath(frame_path),
+                    "posture": posture_score_to_label(score_10),
+                }
+            )
 
             if prev_left_hand is not None:
                 left_dist = abs(prev_left_hand.x - left_wrist.x) + abs(prev_left_hand.y - left_wrist.y)
@@ -217,6 +230,7 @@ def _analyze_frames_common(analyzer, frames_dir, max_frames, subsample_step):
             "gesture_label": gesture_label,
             "missing_frames": missing_frames,
             "frames_processed": len(posture_scores) + missing_frames,
+            "posture_per_frame": posture_per_frame,
         }
     except Exception:
         return _fallback()

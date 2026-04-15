@@ -1,0 +1,250 @@
+{
+  "$schema_version": "1.0.0",
+  "description": "Training dataset schema for interview behavior and speech scoring models.",
+  "dataset": {
+    "name": "interview_segments",
+    "granularity": "one row per interview segment; aggregate rows for full-session tasks",
+    "primary_key": [
+      "session_id",
+      "segment_id"
+    ]
+  },
+  "fields": [
+    {
+      "name": "session_id",
+      "type": "string",
+      "required": true,
+      "description": "Unique interview/session identifier."
+    },
+    {
+      "name": "segment_id",
+      "type": "string",
+      "required": true,
+      "description": "Segment identifier within session (e.g. q1_answer)."
+    },
+    {
+      "name": "question_index",
+      "type": "integer",
+      "required": false,
+      "description": "Question index for the segment."
+    },
+    {
+      "name": "segment_start_ms",
+      "type": "integer",
+      "required": false,
+      "description": "Segment start timestamp in milliseconds."
+    },
+    {
+      "name": "segment_end_ms",
+      "type": "integer",
+      "required": false,
+      "description": "Segment end timestamp in milliseconds."
+    },
+    {
+      "name": "duration_sec",
+      "type": "number",
+      "required": true,
+      "description": "Segment duration in seconds."
+    },
+    {
+      "name": "emotion_dominant",
+      "type": "string",
+      "required": true,
+      "allowed_values": [
+        "happy",
+        "neutral",
+        "sad",
+        "fear",
+        "angry",
+        "surprise",
+        "disgust",
+        "unknown"
+      ],
+      "description": "Dominant emotion label for the segment."
+    },
+    {
+      "name": "emotion_histogram",
+      "type": "object<number>",
+      "required": true,
+      "description": "Per-emotion normalized frequencies over frames."
+    },
+    {
+      "name": "emotion_switch_count",
+      "type": "integer",
+      "required": false,
+      "description": "Number of dominant-emotion changes over time."
+    },
+    {
+      "name": "posture_score_10",
+      "type": "number",
+      "required": true,
+      "range": [
+        0,
+        10
+      ],
+      "description": "Posture score from body analysis (0-10)."
+    },
+    {
+      "name": "movement_score",
+      "type": "number",
+      "required": true,
+      "description": "Average body movement proxy score."
+    },
+    {
+      "name": "gesture_label",
+      "type": "string",
+      "required": true,
+      "description": "Body language class (e.g. controlled, excessive movement)."
+    },
+    {
+      "name": "eye_contact_avg",
+      "type": "number",
+      "required": true,
+      "range": [
+        0,
+        1
+      ],
+      "description": "Average eye-contact score in segment."
+    },
+    {
+      "name": "eye_contact_std",
+      "type": "number",
+      "required": false,
+      "description": "Eye-contact score variability in segment."
+    },
+    {
+      "name": "speech_word_count",
+      "type": "integer",
+      "required": true,
+      "description": "Total spoken words for segment."
+    },
+    {
+      "name": "speech_wpm",
+      "type": "number",
+      "required": true,
+      "description": "Words per minute."
+    },
+    {
+      "name": "filler_count",
+      "type": "integer",
+      "required": true,
+      "description": "Count of filler words."
+    },
+    {
+      "name": "pause_ratio",
+      "type": "number",
+      "required": false,
+      "description": "Silent duration / segment duration."
+    },
+    {
+      "name": "transcript_text",
+      "type": "string",
+      "required": true,
+      "description": "Transcribed answer text."
+    },
+    {
+      "name": "tone_summary",
+      "type": "string",
+      "required": false,
+      "description": "Existing tone analysis output (if available)."
+    },
+    {
+      "name": "recording_quality",
+      "type": "string",
+      "required": false,
+      "allowed_values": [
+        "good",
+        "fair",
+        "poor"
+      ],
+      "description": "Human-rated A/V quality."
+    },
+    {
+      "name": "lighting_condition",
+      "type": "string",
+      "required": false,
+      "description": "Environment tag for fairness/drift analysis."
+    },
+    {
+      "name": "accent_region",
+      "type": "string",
+      "required": false,
+      "description": "Optional speech subgroup tag for error analysis."
+    },
+    {
+      "name": "label_confidence_1_10",
+      "type": "number",
+      "required": true,
+      "range": [
+        1,
+        10
+      ],
+      "description": "Ground-truth confidence label."
+    },
+    {
+      "name": "label_clarity_1_10",
+      "type": "number",
+      "required": true,
+      "range": [
+        1,
+        10
+      ],
+      "description": "Ground-truth clarity label."
+    },
+    {
+      "name": "label_trend",
+      "type": "string",
+      "required": true,
+      "allowed_values": [
+        "improved",
+        "stable",
+        "declined"
+      ],
+      "description": "Ground-truth temporal trend."
+    },
+    {
+      "name": "label_recommendation",
+      "type": "integer",
+      "required": true,
+      "allowed_values": [
+        0,
+        1
+      ],
+      "description": "Final recommendation binary label."
+    },
+    {
+      "name": "rater_count",
+      "type": "integer",
+      "required": true,
+      "description": "Number of human raters."
+    },
+    {
+      "name": "label_disagreement_std",
+      "type": "number",
+      "required": false,
+      "description": "Stddev across rater confidence scores."
+    },
+    {
+      "name": "created_at",
+      "type": "string(datetime)",
+      "required": true,
+      "description": "Row creation timestamp."
+    }
+  ],
+  "splits": {
+    "train": 0.7,
+    "validation": 0.15,
+    "test": 0.15,
+    "stratify_by": [
+      "label_recommendation",
+      "recording_quality"
+    ],
+    "group_by": "session_id"
+  },
+  "quality_rules": [
+    "Drop segments with empty transcript_text unless explicitly marked as no_response.",
+    "Clamp derived scores to valid ranges before serialization.",
+    "Require at least 2 raters for high-confidence supervised labels.",
+    "Store raw model outputs separately to enable feature re-extraction."
+  ]
+}

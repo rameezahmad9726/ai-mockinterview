@@ -1,19 +1,27 @@
 import os
-import cv2
 import tempfile
 import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from modules.report_builder import save_html_report
-from modules.emotion_vit import analyze_emotions_vit
-from modules.body_language import _get_body_analyzer
 from modules.audio_extractor import extract_audio
 from modules.speech_analysis import SpeechAnalyzer
+from modules.behavior_analysis import build_behavior_insights
+from modules.model_inference.behavior_fusion import infer_behavior_confidence
+from modules.model_inference.speech_scorer import infer_speech_clarity
+from modules.training_data_logger import build_training_row, append_training_row_jsonl
 
 # Speed vs quality: fewer frames + higher subsample = faster analysis (slightly less accurate)
 MAX_FRAMES = int(os.environ.get("INTERVEUX_MAX_FRAMES", "20"))  # default 20 for speed (raise for more coverage)
 SUBSAMPLE_STEP = int(os.environ.get("INTERVEUX_SUBSAMPLE_STEP", "4"))  # process every Nth frame (4 = faster)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 def extract_frames(video_path, output_dir, fps=1):
@@ -23,6 +31,11 @@ def extract_frames(video_path, output_dir, fps=1):
     is often unreliable with browser-recorded WebM files.
     """
     os.makedirs(output_dir, exist_ok=True)
+    try:
+        import cv2
+    except Exception as e:
+        print(f"[WARN] OpenCV unavailable, skipping frame extraction: {e}")
+        return 0
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -64,14 +77,54 @@ def extract_frames(video_path, output_dir, fps=1):
 def run_emotion_analysis(frames_dir, subsample_step=None):
     if subsample_step is None:
         subsample_step = SUBSAMPLE_STEP
-    return analyze_emotions_vit(frames_dir, subsample_step=subsample_step)
+    try:
+        from modules.emotion_vit import analyze_emotions_vit
+        return analyze_emotions_vit(frames_dir, subsample_step=subsample_step)
+    except Exception as e:
+        print(f"[WARN] Emotion analysis unavailable: {e}")
+        return {
+            "dominant_emotion": "Neutral",
+            "emotion_counts": {},
+            "emotion_history": [],
+            "emotion_per_frame": [],
+            "frames_analyzed": 0,
+            "error": str(e),
+        }
 
 
 def run_body_language_analysis(frames_dir, subsample_step=None):
-    from modules.body_language import _get_body_analyzer
     if subsample_step is None:
         subsample_step = SUBSAMPLE_STEP
-    return _get_body_analyzer().analyze_video(frames_dir, subsample_step=subsample_step)
+    try:
+        from modules.body_language import _get_body_analyzer
+        return _get_body_analyzer().analyze_video(frames_dir, subsample_step=subsample_step)
+    except Exception as e:
+        print(f"[WARN] Body language analysis unavailable: {e}")
+        return {
+            "posture_score": 0,
+            "movement_score": 0,
+            "gesture_label": "Body analysis unavailable in current environment",
+            "posture_per_frame": [],
+            "error": str(e),
+        }
+
+
+def run_eye_contact_analysis(frames_dir, subsample_step=None):
+    """Per-frame eye contact via MediaPipe Face Mesh (same subsample as emotion/body)."""
+    if subsample_step is None:
+        subsample_step = SUBSAMPLE_STEP
+    try:
+        from modules.eye_contact import analyze_eye_contact_frames_dir
+        return analyze_eye_contact_frames_dir(str(frames_dir), subsample_step=subsample_step)
+    except Exception as e:
+        print(f"[WARN] Eye contact analysis unavailable: {e}")
+        return {
+            "eye_contact_per_frame": [],
+            "avg_eye_contact": 0.0,
+            "frames_analyzed": 0,
+            "eye_contact_available": False,
+            "error": str(e),
+        }
 
 
 # Shared SpeechAnalyzer (reuse across analyses)
@@ -89,8 +142,9 @@ def run_speech_analysis(audio_path, questions=None):
 
 def _compute_recommendation(emotion, body, speech, c_score, conf_score):
     """Compute detailed recommendation with specific strengths and areas to improve."""
+    insufficient = speech.get("insufficient_candidate_speech") or speech.get("candidate_speech_detected") is False
     # If no or insufficient candidate speech (user didn't answer / barely participated), always Not Recommended
-    if speech.get("candidate_speech_detected") is False or speech.get("insufficient_candidate_speech") is True:
+    if insufficient:
         return {
             "recommended": False,
             "label": "Not Recommended",
@@ -344,12 +398,18 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
     update_progress(38, "Loading speech model...")
     _get_speech_analyzer()._ensure_model_loaded()
 
-    # Parallel analysis: speech, emotion, body (all independent after extraction)
+    # Parallel analysis: speech, emotion, body, eye contact (independent after extraction)
     speech = None
     emotion_data = None
     body_data = None
+    eye_data = None
     completed = 0
-    _progress_steps = [(50, "Analyzing... (1/3)"), (65, "Analyzing... (2/3)"), (80, "Analyzing... (3/3)")]
+    _progress_steps = [
+        (48, "Analyzing... (1/4)"),
+        (58, "Analyzing... (2/4)"),
+        (68, "Analyzing... (3/4)"),
+        (78, "Analyzing... (4/4)"),
+    ]
 
     def run_speech():
         if not audio_path or not Path(audio_path).exists():
@@ -363,11 +423,12 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
             }
         return run_speech_analysis(audio_path, questions)
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futures = {
             ex.submit(run_speech): "speech",
             ex.submit(run_emotion_analysis, str(frames_dir), SUBSAMPLE_STEP): "emotion",
             ex.submit(run_body_language_analysis, str(frames_dir), SUBSAMPLE_STEP): "body",
+            ex.submit(run_eye_contact_analysis, str(frames_dir), SUBSAMPLE_STEP): "eye",
         }
         for fut in as_completed(futures):
             key = futures[fut]
@@ -381,27 +442,115 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
                     speech = result
                 elif key == "emotion":
                     emotion_data = result
-                else:
+                elif key == "body":
                     body_data = result
+                else:
+                    eye_data = result
             except Exception as e:
                 print(f"[ERROR] {key} failed: {e}")
                 if key == "speech":
                     speech = {"error": str(e), "transcript": "", "word_count": 0, "speaking_speed_wpm": 0, "clarity_score": 5, "confidence_score": 5}
                 elif key == "emotion":
-                    emotion_data = {"dominant_emotion": "Neutral", "emotion_counts": {}, "frames_analyzed": 0}
+                    emotion_data = {
+                        "dominant_emotion": "Neutral",
+                        "emotion_counts": {},
+                        "frames_analyzed": 0,
+                        "emotion_per_frame": [],
+                    }
+                elif key == "body":
+                    body_data = {
+                        "posture_score": 0,
+                        "movement_score": 0,
+                        "gesture_label": "Pose not detected (ensure upper body visible)",
+                        "posture_per_frame": [],
+                    }
                 else:
-                    body_data = {"posture_score": 0, "movement_score": 0, "gesture_label": "Pose not detected (ensure upper body visible)"}
+                    eye_data = {
+                        "eye_contact_per_frame": [],
+                        "avg_eye_contact": 0.0,
+                        "frames_analyzed": 0,
+                        "eye_contact_available": False,
+                    }
 
     if speech is None:
         speech = {"error": "Speech analysis failed", "transcript": "", "word_count": 0, "speaking_speed_wpm": 0, "clarity_score": 5, "confidence_score": 5}
     if emotion_data is None:
-        emotion_data = {"dominant_emotion": "Neutral", "emotion_counts": {}, "frames_analyzed": 0}
+        emotion_data = {
+            "dominant_emotion": "Neutral",
+            "emotion_counts": {},
+            "frames_analyzed": 0,
+            "emotion_per_frame": [],
+        }
     if body_data is None:
-        body_data = {"posture_score": 0, "movement_score": 0, "gesture_label": "Analysis failed"}
+        body_data = {
+            "posture_score": 0,
+            "movement_score": 0,
+            "gesture_label": "Analysis failed",
+            "posture_per_frame": [],
+        }
+    if eye_data is None:
+        eye_data = {
+            "eye_contact_per_frame": [],
+            "avg_eye_contact": 0.0,
+            "frames_analyzed": 0,
+            "eye_contact_available": False,
+        }
 
     update_progress(90, "Generating final report and insights...")
     print("[STEP] Creating final report...")
+
+    # Optional learned speech score (phase rollout, disabled by default).
+    use_learned_speech = _env_bool("USE_LEARNED_SPEECH_MODEL", default=False)
+    speech_inference = infer_speech_clarity(speech)
+    if use_learned_speech and speech_inference.model_loaded and speech_inference.clarity_score is not None:
+        speech["clarity_score"] = round(float(speech_inference.clarity_score), 2)
+
     report = build_final_report(emotion_data, body_data, speech, str(audio_path))
+
+    behavior_insights = build_behavior_insights(emotion_data, body_data, eye_data)
+    heuristic_behavior = dict(behavior_insights)
+
+    # Optional learned behavior confidence score (phase rollout, disabled by default).
+    use_learned_behavior = _env_bool("USE_LEARNED_BEHAVIOR_MODEL", default=False)
+    dual_run = _env_bool("USE_DUAL_RUN_MODE", default=True)
+    behavior_inference = infer_behavior_confidence(report, behavior_insights)
+    if use_learned_behavior and behavior_inference.model_loaded and behavior_inference.confidence_score is not None:
+        learned_conf_0_1 = max(0.0, min(1.0, behavior_inference.confidence_score / 10.0))
+        behavior_insights["confidence_score"] = round(learned_conf_0_1, 3)
+        report["final_summary"]["confidence_score"] = round(float(behavior_inference.confidence_score), 2)
+        report["final_summary"]["recommendation"] = _compute_recommendation(
+            emotion_data,
+            body_data,
+            speech,
+            report["final_summary"].get("clarity_score") or 5,
+            report["final_summary"].get("confidence_score") or 5,
+        )
+
+    report["behavior_insights"] = behavior_insights
+    report["model_metadata"] = {
+        "inference_mode": "learned" if (use_learned_behavior or use_learned_speech) else "heuristic",
+        "flags": {
+            "USE_LEARNED_BEHAVIOR_MODEL": use_learned_behavior,
+            "USE_LEARNED_SPEECH_MODEL": use_learned_speech,
+            "USE_DUAL_RUN_MODE": dual_run,
+        },
+        "behavior_model": {
+            "model_version": behavior_inference.model_version,
+            "model_loaded": behavior_inference.model_loaded,
+            "error": behavior_inference.error,
+        },
+        "speech_model": {
+            "model_version": speech_inference.model_version,
+            "model_loaded": speech_inference.model_loaded,
+            "error": speech_inference.error,
+        },
+    }
+    if dual_run:
+        report["model_metadata"]["dual_run"] = {
+            "heuristic_behavior": heuristic_behavior,
+            "learned_behavior_confidence_1_10": behavior_inference.confidence_score,
+            "learned_speech_clarity_1_10": speech_inference.clarity_score,
+        }
 
     # ---------------------------------------------------
     # Save JSON + HTML
@@ -434,8 +583,24 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
     report["report_json_path"] = str(json_path)
     report["report_html_path"] = str(html_path)
 
+    # Phase 0: continuously log training rows for future model iterations.
+    if _env_bool("ENABLE_TRAINING_ROW_LOG", default=True):
+        try:
+            training_rows_dir = os.environ.get("TRAINING_ROWS_DIR", str(Path(__file__).resolve().parent / "training_rows"))
+            training_rows_file = Path(training_rows_dir) / "interview_segments.jsonl"
+            row_session_id = session_id if session_id else base_name
+            training_row = build_training_row(report, session_id=row_session_id, segment_id="full_interview")
+            append_training_row_jsonl(training_row, training_rows_file)
+            report["training_row_log_path"] = str(training_rows_file)
+        except Exception as e:
+            print(f"[WARN] Failed to append training row log: {e}")
+
     return {
-    "report": report,
-    "report_json_path": str(json_path),
-    "report_html_path": str(html_path)
+        "report": report,
+        "report_json_path": str(json_path),
+        "report_html_path": str(html_path),
+        "confidence_score": behavior_insights["confidence_score"],
+        "trend": behavior_insights["trend"],
+        "feedback": behavior_insights["feedback"],
+        "eye_contact_score": behavior_insights["eye_contact_score"],
     }

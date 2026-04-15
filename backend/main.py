@@ -9,9 +9,9 @@ import uuid
 import shutil
 import os
 
-from modules.resume_parser import parse_resume
 from modules.question_generator import generate_questions
 from modules.tts import generate_speech, generate_speech_batch
+from modules.training_data_logger import get_training_row_log_status
 
 app = FastAPI()
 
@@ -29,6 +29,30 @@ UPLOAD_ROOT.mkdir(exist_ok=True)
 
 # Global store for tracking analysis progress
 progress_store = {}
+
+def _format_runtime_error(error: Exception) -> str:
+    """
+    Return a concise, user-friendly runtime error for UI display.
+
+    Keeps full traceback in backend logs while avoiding huge raw dependency
+    tracebacks in polling responses.
+    """
+    raw = str(error) or error.__class__.__name__
+    text = raw.lower()
+    if "application control policy has blocked this file" in text:
+        return (
+            "Video analysis is blocked by Windows Application Control on this machine "
+            "(a required Python native module/DLL was blocked). Ask IT to allow "
+            "NumPy/OpenCV/Pydantic binaries in the project venv, or run the backend in "
+            "an unrestricted environment (WSL/Docker)."
+        )
+    if "importing the numpy c-extensions failed" in text or "_multiarray_umath" in text:
+        return (
+            "NumPy native extensions could not load, so video analysis cannot run in the "
+            "current environment."
+        )
+    # Keep generic errors short enough for frontend alerts.
+    return raw[:400]
 
 @app.get("/analysis-status/{session_id}")
 async def get_analysis_status(session_id: str):
@@ -54,7 +78,7 @@ def run_analysis_task(video_path, session_id, parsed_questions):
         traceback.print_exc()
         print(f"Error in background task: {e}")
         progress_store[session_id]["status"] = "error"
-        progress_store[session_id]["message"] = str(e)
+        progress_store[session_id]["message"] = _format_runtime_error(e)
 
 @app.post("/analyze")
 async def analyze_video(
@@ -103,6 +127,8 @@ async def analyze_resume(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
 
     try:
+        from modules.resume_parser import parse_resume
+
         # 1. Parse Text
         resume_text = parse_resume(str(file_path))
         
@@ -128,6 +154,19 @@ async def analyze_resume(file: UploadFile = File(...)):
 @app.get("/")
 def home():
     return {"message": "Interveux API is running!"}
+
+
+@app.get("/training-rows/status")
+def training_rows_status():
+    """
+    Quick status for Phase 0 training row logs.
+    """
+    training_rows_dir = os.environ.get(
+        "TRAINING_ROWS_DIR",
+        str(Path(__file__).resolve().parent / "training_rows"),
+    )
+    jsonl_path = Path(training_rows_dir) / "interview_segments.jsonl"
+    return get_training_row_log_status(jsonl_path)
 
 
 @app.post("/generate-tts")

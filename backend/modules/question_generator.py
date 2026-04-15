@@ -4,10 +4,24 @@ import traceback
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from backend directory so the key is found regardless of cwd
+# Resolve common env locations once.
 _backend_dir = Path(__file__).resolve().parent.parent
-load_dotenv(_backend_dir / ".env")
-load_dotenv()
+_project_root = _backend_dir.parent
+_backend_env = _backend_dir / ".env"
+_root_env = _project_root / ".env"
+
+
+def _load_env_files():
+    """
+    Load env values from both project root and backend folders.
+    Root first, backend second so backend/.env can override if needed.
+    """
+    load_dotenv(_root_env, override=False)
+    load_dotenv(_backend_env, override=False)
+    load_dotenv(override=False)
+
+
+_load_env_files()
 
 # The OpenAI Python SDK renamed the client in v1.x. We import cautiously so
 # older 0.x installs still work.
@@ -17,7 +31,6 @@ except Exception:  # pragma: no cover
     OpenAI = None
 import openai  # keeps 0.x fallback available
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # Allow overriding model via env; default to a modern lightweight model.
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -27,15 +40,18 @@ def _get_client():
     Create an OpenAI client compatible with both SDK 0.x and 1.x.
     Raises a clear error if no API key is present or SDK is incompatible.
     """
-    if not OPENAI_API_KEY:
+    # Re-load env lazily so updates to .env are picked up without stale module state.
+    _load_env_files()
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env or environment.")
 
     # Preferred path: SDK 1.x
     if OpenAI is not None:
-        return OpenAI(api_key=OPENAI_API_KEY)
+        return OpenAI(api_key=api_key)
 
     # Fallback: SDK 0.x legacy usage
-    openai.api_key = OPENAI_API_KEY
+    openai.api_key = api_key
     return openai
 
 

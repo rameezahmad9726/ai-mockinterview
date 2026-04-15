@@ -1,5 +1,4 @@
 import os
-import pdfplumber
 from docx import Document
 
 def parse_resume(file_path: str) -> str:
@@ -16,6 +15,8 @@ def parse_resume(file_path: str) -> str:
         raise ValueError(f"Unsupported file format: {ext}")
 
 def _extract_from_pdf(file_path: str) -> str:
+    import pdfplumber
+
     text = ""
     with pdfplumber.open(file_path) as pdf:
         # Limit to first 3 pages for maximum speed

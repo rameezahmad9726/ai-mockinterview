@@ -1,6 +1,7 @@
 import os
 import torch
 from pathlib import Path
+from typing import Any, Dict, List
 from transformers import pipeline
 
 # Switch to a much faster MobileNetV3-based model
@@ -46,30 +47,36 @@ def analyze_emotions_vit(frames_dir, subsample_step=2):
             "emotion_history": []
         }
 
-    emotion_history = []
-    
+    emotion_history: List[str] = []
+    emotion_per_frame: List[Dict[str, Any]] = []
+
+    def _record(path_str: str, label: str) -> None:
+        norm = os.path.normpath(path_str)
+        emotion_history.append(label)
+        emotion_per_frame.append({"path": norm, "label": label})
+
     # Batch processing significantly speeds up inference
     print(f"[INFO] Processing {len(frames)} frames...")
-    
+
     # Optimized batch size for average hardware
     batch_size = 16
     for i in range(0, len(frames), batch_size):
         batch_paths = [str(p) for p in frames[i:i+batch_size]]
         try:
             results = classifier(batch_paths)
-            for result in results:
+            for path_str, result in zip(batch_paths, results):
                 # result is a list of scores, get the top one
-                top_emotion = result[0]['label']
-                emotion_history.append(top_emotion)
+                top_emotion = result[0]["label"]
+                _record(path_str, top_emotion)
         except Exception as e:
             print(f"[WARN] Batch error at {i}: {e}")
             # Fallback to single processing for this batch if it fails
             for p in batch_paths:
                 try:
                     res = classifier(p)
-                    emotion_history.append(res[0]['label'])
-                except:
-                    emotion_history.append("neutral")
+                    _record(p, res[0]["label"])
+                except Exception:
+                    _record(p, "neutral")
 
     # Calculate statistics
     counts = {}
@@ -86,5 +93,6 @@ def analyze_emotions_vit(frames_dir, subsample_step=2):
         "dominant_emotion": dominant,
         "emotion_counts": counts,
         "emotion_history": emotion_history,
-        "frames_analyzed": len(emotion_history)
+        "emotion_per_frame": emotion_per_frame,
+        "frames_analyzed": len(emotion_history),
     }
