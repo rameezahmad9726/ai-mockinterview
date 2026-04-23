@@ -14,6 +14,7 @@ function App() {
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
   const [interviewQuestions, setInterviewQuestions] = useState([]);
+  const [resumeContext, setResumeContext] = useState(null);
   const [sessionId, setSessionId] = useState(`session_${Date.now()}`);
   const [backendReachable, setBackendReachable] = useState(null); // null = checking, true/false = result
 
@@ -35,8 +36,9 @@ function App() {
     };
   }, []);
 
-  const handleStartInterview = (questions) => {
+  const handleStartInterview = (questions, context = null) => {
     setInterviewQuestions(questions);
+    setResumeContext(context);
     setSessionId(`session_${Date.now()}`);
     setActiveTab('live');
   };
@@ -210,7 +212,7 @@ function App() {
           </div>
         ) : (
           /* Live Interview Tab */
-          <LiveInterview questions={interviewQuestions} sessionId={sessionId} />
+          <LiveInterview questions={interviewQuestions} sessionId={sessionId} resumeContext={resumeContext} />
         )}
       </main>
 

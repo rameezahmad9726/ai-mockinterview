@@ -6,6 +6,7 @@ function ResumeEvaluator({ onStartInterview }) {
     const [file, setFile] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [questions, setQuestions] = useState(null);
+    const [resumeContext, setResumeContext] = useState(null);
     const [error, setError] = useState(null);
     const [analysisStage, setAnalysisStage] = useState(0);
 
@@ -57,6 +58,12 @@ function ResumeEvaluator({ onStartInterview }) {
             }
 
             setQuestions(data.questions);
+            setResumeContext({
+                resume_session_id: data.session_id,
+                domain: data.domain,
+                certifications: data.certifications || [],
+                key_skills: data.key_skills || [],
+            });
         } catch (err) {
             console.error('Error analyzing resume:', err);
             setError(err.message);
@@ -141,8 +148,24 @@ function ResumeEvaluator({ onStartInterview }) {
                         Your resume has been analyzed and 5 tailored interview questions are ready. Click below to begin your live mock interview.
                     </p>
 
+                    {resumeContext && (
+                        <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left max-w-xl mx-auto">
+                            <div className="bg-slate-900/60 border border-slate-700 rounded-lg p-3">
+                                <p className="text-[11px] uppercase tracking-wider text-slate-400">Inferred Domain</p>
+                                <p className="text-white font-semibold mt-1">{resumeContext.domain || 'General'}</p>
+                            </div>
+                            <div className="bg-slate-900/60 border border-slate-700 rounded-lg p-3">
+                                <p className="text-[11px] uppercase tracking-wider text-slate-400">Certifications</p>
+                                <p className="text-white font-semibold mt-1">
+                                    {(resumeContext.certifications || []).length > 0
+                                        ? `${resumeContext.certifications.length} found`
+                                        : 'None listed'}
+                                </p>
+                            </div>
+                        </div>
+                    )}
                     <button
-                        onClick={() => onStartInterview(questions)}
+                        onClick={() => onStartInterview(questions, resumeContext)}
                         className="bg-green-600 hover:bg-green-700 text-white px-10 py-4 rounded-full font-bold text-lg shadow-xl shadow-green-900/30 transition-all hover:scale-105 flex items-center mx-auto"
                     >
                         <VideoCameraIcon className="h-6 w-6 mr-3" />

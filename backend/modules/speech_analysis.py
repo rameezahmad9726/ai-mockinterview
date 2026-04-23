@@ -2,6 +2,25 @@ import os
 import json
 from pathlib import Path
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _use_openai_whisper_api() -> bool:
+    """Use OpenAI audio transcription (fast on CPU laptops); set INTERVEUX_OPENAI_WHISPER=false for local tiny."""
+    raw = os.environ.get("INTERVEUX_OPENAI_WHISPER", "true")
+    if raw is None or str(raw).strip() == "":
+        return True
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+# OpenAI diarization + tone (default on for split Q/A transcript; set ENABLE_TONE_ANALYSIS=false to skip ~5–15s API call)
+DIARIZATION_TRANSCRIPT_CHARS = int(os.environ.get("INTERVEUX_DIARIZATION_TRANSCRIPT_CHARS", "48000"))
+
 # Try to import speech analysis libraries
 try:
     import whisper
@@ -27,10 +46,13 @@ class SpeechAnalyzer:
             print(f"Loading Whisper model: {self.model_name}...")
             try:
                 import ssl
-                import urllib.request
-                # Bypass SSL verification for model download
-                ssl._create_default_https_context = ssl._create_unverified_context
-                self.model = whisper.load_model(self.model_name)
+
+                old = ssl._create_default_https_context
+                try:
+                    ssl._create_default_https_context = ssl._create_unverified_context
+                    self.model = whisper.load_model(self.model_name)
+                finally:
+                    ssl._create_default_https_context = old
                 self._load_error = None
                 print("[INFO] Whisper model loaded successfully")
             except Exception as e:
@@ -76,6 +98,24 @@ class SpeechAnalyzer:
                 print(f"[WARN] Removed hallucinated interviewee segment (only {ratio:.0%} words in transcript)")
         return validated, total_interviewee_words
 
+    @staticmethod
+    def _normalize_speaker_label(raw: str) -> str:
+        r = (raw or "").strip().lower()
+        if r in ("interviewee", "candidate", "respondent", "applicant", "speaker_1", "speaker b"):
+            return "Interviewee"
+        return "Interviewer"
+
+    @staticmethod
+    def _normalize_formatted(formatted: list) -> list:
+        out = []
+        for seg in formatted or []:
+            if not isinstance(seg, dict):
+                continue
+            row = dict(seg)
+            row["speaker"] = SpeechAnalyzer._normalize_speaker_label(row.get("speaker", ""))
+            out.append(row)
+        return out
+
     def _diarize_and_analyze_tone(self, transcript, questions=None, clarity_score=None, filler_count=0):
         """
         Single LLM call: diarize transcript + analyze tone. Saves one API call.
@@ -97,22 +137,34 @@ class SpeechAnalyzer:
         elif clarity_score is not None and filler_count > 0:
             clarity_note = f"\n\nThe candidate used {filler_count} filler word(s); clarity score is {clarity_score}/10. Do not contradict numeric scores."
 
+        snippet = transcript[:DIARIZATION_TRANSCRIPT_CHARS]
+        truncated = len(transcript) > len(snippet)
+        trunc_note = ""
+        if truncated:
+            trunc_note = (
+                f"\nNOTE: Only the first {len(snippet)} characters of the transcript are shown below "
+                "(full audio was longer). Segment exactly this excerpt; do not invent text beyond it.\n"
+            )
+
         prompt = f"""
-Task 1 (Diarization): Segment the raw transcript into "Interviewer" and "Interviewee" turns.
+Task 1 (Diarization): Segment the raw transcript into alternating "Interviewer" and "Interviewee" turns.
 Context: {context_prompt}
+{trunc_note}
 
 CRITICAL RULES - DO NOT VIOLATE:
-- Use ONLY the exact words that appear in the Raw Transcript. Copy them verbatim.
-- If the candidate did NOT speak, there will be NO "Interviewee" segments. Do NOT invent, generate, or paraphrase answers.
-- The Raw Transcript is the ONLY source. If you don't see candidate words in it, assign everything to "Interviewer" only.
-- Interviewer = questions being asked. Interviewee = ONLY words the candidate actually said (from the transcript).
+- Use ONLY the exact words that appear in the Raw Transcript. Copy them verbatim (no paraphrase).
+- Interviewer = scheduled questions, setup, and follow-ups from the interviewer.
+- Interviewee = the candidate's spoken answers only (verbatim from the transcript).
+- When a question ends and the candidate begins answering, START A NEW "Interviewee" segment for that answer.
+- Do NOT put the entire recording into a single "Interviewer" block if the candidate clearly speaks between questions.
+- If the candidate truly never spoke, use only "Interviewer" segments.
 
-Task 2 (Tone): Analyze ONLY the Interviewee's actual responses (from transcript) for confidence and tone.
+Task 2 (Tone): Analyze ONLY the Interviewee's actual responses for confidence and tone.
 If there are no Interviewee segments, set confidence_rating to 1 and tone_analysis to "No candidate response detected."
 {clarity_note}
 
-Raw Transcript (this is the ONLY speech captured from the recording):
-\"\"\"{transcript[:4000]}\"\"\"
+Raw Transcript (ONLY source for diarization):
+\"\"\"{snippet}\"\"\"
 
 Return ONLY a JSON object:
 {{
@@ -159,7 +211,7 @@ Return ONLY a JSON object:
                         validated.append(seg)
                 else:
                     validated.append(seg)
-            formatted = validated
+            formatted = SpeechAnalyzer._normalize_formatted(validated)
 
             # If no real interviewee content, override tone
             interviewee_words = sum(len(s.get("text", "").split()) for s in formatted if s.get("speaker") == "Interviewee" and "[No audible response]" not in (s.get("text") or ""))
@@ -184,7 +236,9 @@ Return ONLY a JSON object:
             return formatted, tone_data
         except Exception as e:
             print(f"Combined diarization+tone failed: {e}. Using fallback.")
-            fallback_formatted = [{"speaker": "Interviewer", "text": transcript}]
+            fallback_formatted = SpeechAnalyzer._normalize_formatted(
+                [{"speaker": "Interviewer", "text": transcript}]
+            )
             return fallback_formatted, {
                 "confidence_rating": 5,
                 "tone_analysis": "Evaluation unavailable.",
@@ -194,23 +248,36 @@ Return ONLY a JSON object:
                 "insufficient_candidate_speech": True,
             }
 
+    def _transcribe_openai_whisper(self, audio_file: Path):
+        """Transcribe interview audio via OpenAI (whisper-1). Expects 16 kHz mono WAV from extract_audio."""
+        import wave
+        from modules.question_generator import _get_client
+
+        client = _get_client()
+        if not hasattr(client, "audio") or not hasattr(client.audio, "transcriptions"):
+            raise RuntimeError("OpenAI SDK too old: need v1 client with audio.transcriptions.create")
+        model = os.environ.get("OPENAI_WHISPER_MODEL", "whisper-1")
+        with audio_file.open("rb") as fh:
+            resp = client.audio.transcriptions.create(
+                model=model,
+                file=fh,
+                language="en",
+            )
+        text = (getattr(resp, "text", None) or "").strip()
+        with wave.open(str(audio_file), "rb") as w:
+            rate = float(w.getframerate() or 16000)
+            duration = w.getnframes() / rate if rate > 0 else 0.0
+        return text, float(duration)
+
     def analyze_audio(self, audio_path: str, questions=None):
-        self._ensure_loaded()  # Load model on first use
-        
-        if not SPEECH_LIBS_AVAILABLE or self.model is None:
-            return {
-                "error": "Speech analysis libraries not installed or model failed to load.",
-                "transcript": "",
-                "word_count": 0,
-                "speaking_speed_wpm": 0,
-                "filler_words_count": 0,
-                "clarity_score": 5,
-                "confidence_score": 5,
-                "audio_duration_seconds": 0
-            }
+        try:
+            from modules.question_generator import _load_env_files
+
+            _load_env_files()
+        except Exception:
+            pass
 
         audio_file = Path(audio_path).resolve()
-
         if not audio_file.exists():
             return {
                 "error": f"Audio file does not exist: {audio_path}",
@@ -222,61 +289,96 @@ Return ONLY a JSON object:
             }
 
         try:
-            # Transcribe FULL audio (not just first 30s). For speed, set INTERVEUX_FAST_SPEECH=1 to use first 30s only.
             fast_speech = os.environ.get("INTERVEUX_FAST_SPEECH", "").strip().lower() in ("1", "true", "yes")
-            if fast_speech:
-                print("Transcribing with Whisper (fast mode: first 30s only)...")
+            transcript = None
+            duration = None
+
+            if _use_openai_whisper_api() and not fast_speech:
+                try:
+                    transcript, duration = self._transcribe_openai_whisper(audio_file)
+                    print(
+                        f"[INFO] Transcribed via OpenAI "
+                        f"{os.environ.get('OPENAI_WHISPER_MODEL', 'whisper-1')} (set INTERVEUX_OPENAI_WHISPER=false for local CPU Whisper)."
+                    )
+                except Exception as e:
+                    print(f"[WARN] OpenAI transcription failed ({e}); falling back to local Whisper.")
+
+            if transcript is None:
+                self._ensure_loaded()
+                if not SPEECH_LIBS_AVAILABLE or self.model is None:
+                    return {
+                        "error": "Speech analysis unavailable (OpenAI transcription failed and local Whisper is missing or did not load).",
+                        "transcript": "",
+                        "word_count": 0,
+                        "speaking_speed_wpm": 0,
+                        "filler_words_count": 0,
+                        "clarity_score": 5,
+                        "confidence_score": 5,
+                        "audio_duration_seconds": 0,
+                    }
+
                 import numpy as np
-                audio_data, sr = librosa.load(str(audio_file), sr=16000)
-                duration = min(30.0, librosa.get_duration(y=audio_data, sr=sr))
-                audio_np = whisper.pad_or_trim(audio_data.astype(np.float32))
-                mel = whisper.log_mel_spectrogram(audio_np).to(self.model.device)
                 try:
                     import torch
-                    use_fp16 = torch.cuda.is_available() and str(self.model.device) != 'cpu'
+                    use_fp16 = torch.cuda.is_available() and str(self.model.device) != "cpu"
                 except ImportError:
                     use_fp16 = False
-                result = whisper.decode(self.model, mel, whisper.DecodingOptions(fp16=use_fp16))
-                transcript = (result.text or "").strip()
-            else:
-                print("Transcribing full audio with Whisper (this may take a while on CPU)...")
-                # Load with librosa to avoid Whisper calling ffmpeg (WinError 2 on Windows if ffmpeg not in PATH)
-                import numpy as np
-                audio_data, sr = librosa.load(str(audio_file), sr=16000, mono=True)
-                duration = librosa.get_duration(y=audio_data, sr=sr)
-                audio_np = audio_data.astype(np.float32)
-                try:
-                    import torch
-                    use_fp16 = torch.cuda.is_available() and str(self.model.device) != 'cpu'
-                except ImportError:
-                    use_fp16 = False
-                result = self.model.transcribe(audio_np, language="en", verbose=False, fp16=use_fp16)
-                transcript = (result.get("text") or "").strip()
-                if duration <= 0 and result.get("segments"):
-                    duration = max(s.get("end", 0) for s in result["segments"])
+
+                if fast_speech:
+                    print("Transcribing with Whisper (fast mode: first ~30s, via transcribe)...")
+                    audio_data, sr = librosa.load(str(audio_file), sr=16000, mono=True, duration=30.0)
+                    duration = float(librosa.get_duration(y=audio_data, sr=sr))
+                    audio_np = audio_data.astype(np.float32)
+                    result = self.model.transcribe(audio_np, language="en", verbose=False, fp16=use_fp16)
+                    transcript = (result.get("text") or "").strip()
+                    if duration <= 0 and result.get("segments"):
+                        duration = float(max(s.get("end", 0) for s in result["segments"]))
+                else:
+                    print("Transcribing full audio with local Whisper tiny (slow on CPU; use OpenAI API by default)...")
+                    audio_data, sr = librosa.load(str(audio_file), sr=16000, mono=True)
+                    duration = float(librosa.get_duration(y=audio_data, sr=sr))
+                    audio_np = audio_data.astype(np.float32)
+                    result = self.model.transcribe(audio_np, language="en", verbose=False, fp16=use_fp16)
+                    transcript = (result.get("text") or "").strip()
+                    if duration <= 0 and result.get("segments"):
+                        duration = float(max(s.get("end", 0) for s in result["segments"]))
+
             print(f"DEBUG: RAW TRANSCRIPT: {transcript}")
             words = transcript.split()
             word_count = len(words)
 
-            # Speaking speed
             speaking_wpm = round((word_count / duration) * 60, 2) if duration > 0 else 0
 
-            # Filler words
             filler_words = [w for w in words if w.lower() in ["um", "uh", "like", "you know"]]
             filler_count = len(filler_words)
 
-            # Clarity & confidence simple estimates (clarity = low filler usage)
             clarity_score = round(max(3.0, 10 - filler_count * 0.5), 2)
-            
-            # Single LLM call: diarization + tone analysis
-            formatted_transcript, tone_data = self._diarize_and_analyze_tone(
-                transcript, questions=questions, clarity_score=clarity_score, filler_count=filler_count
-            )
+
+            if _env_bool("ENABLE_TONE_ANALYSIS", default=True):
+                formatted_transcript, tone_data = self._diarize_and_analyze_tone(
+                    transcript, questions=questions, clarity_score=clarity_score, filler_count=filler_count
+                )
+            else:
+                # No fake speaker labels — UI shows plain transcript block (same as report_builder fallback).
+                formatted_transcript = []
+                tone_data = {
+                    "confidence_rating": 5,
+                    "tone_analysis": "",
+                    "improvement_tip": "",
+                    "tone_analysis_skipped": True,
+                    "tone_skip_reason": (
+                        "OpenAI diarization and tone were disabled (ENABLE_TONE_ANALYSIS is not true). "
+                        "Set ENABLE_TONE_ANALYSIS=true in backend/.env and restart the API."
+                    ),
+                    "candidate_speech_detected": word_count >= 10,
+                    "interviewee_word_count": 0,
+                    "insufficient_candidate_speech": word_count < 15,
+                }
 
             # When insufficient candidate speech, don't show misleading clarity (from empty transcript)
             insufficient = tone_data.get("insufficient_candidate_speech", False)
             out_clarity = None if insufficient else clarity_score
-            return {
+            out = {
                 "transcript": transcript,
                 "formatted_transcript": formatted_transcript,
                 "word_count": word_count,
@@ -291,6 +393,10 @@ Return ONLY a JSON object:
                 "interviewee_word_count": tone_data.get("interviewee_word_count", 0),
                 "insufficient_candidate_speech": insufficient,
             }
+            if tone_data.get("tone_analysis_skipped"):
+                out["tone_analysis_skipped"] = True
+                out["tone_skip_reason"] = tone_data.get("tone_skip_reason", "")
+            return out
 
         except Exception as e:
             return {

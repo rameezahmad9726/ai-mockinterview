@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MicrophoneIcon, VideoCameraIcon, StopIcon, SpeakerWaveIcon, ChevronRightIcon, PlayIcon } from '@heroicons/react/24/outline';
 
-const LiveInterview = ({ questions, sessionId }) => {
+const LiveInterview = ({ questions, sessionId, resumeContext }) => {
     const [isRecording, setIsRecording] = useState(false);
     const [currentQuestionIndex, setCurrentQuestionIndex] = useState(-1);
     const [isSpeaking, setIsSpeaking] = useState(false);
@@ -12,8 +12,8 @@ const LiveInterview = ({ questions, sessionId }) => {
     const [ttsUrls, setTtsUrls] = useState({});
     const [isPreloading, setIsPreloading] = useState(false);
     const [isFirstQuestionReady, setIsFirstQuestionReady] = useState(false);
-    const [timeLeft, setTimeLeft] = useState(30); // 30 seconds for testing
-    const QUESTION_TIME_LIMIT = 30;
+    const QUESTION_TIME_LIMIT = 60;
+    const [timeLeft, setTimeLeft] = useState(QUESTION_TIME_LIMIT);
 
     const audioContextRef = useRef(null);
     const mixedStreamRef = useRef(null);
@@ -21,6 +21,15 @@ const LiveInterview = ({ questions, sessionId }) => {
     const videoRef = useRef(null);
     const mediaRecorderRef = useRef(null);
     const audioRef = useRef(new Audio());
+
+    // Per-question answering windows — start when the TTS finishes playing
+    // (candidate begins speaking), end when the question is advanced/skipped
+    // or the recording finishes. Sent to the backend so eye-contact flags
+    // outside these windows (i.e. while the candidate is reading/listening)
+    // are suppressed.
+    const recordingStartRef = useRef(null);           // ms timestamp
+    const currentAnswerRef = useRef(null);            // { idx, start_sec } | null
+    const answerWindowsRef = useRef([]);              // [{question_idx, start_sec, end_sec}]
 
     useEffect(() => {
         let timer;
@@ -236,22 +245,51 @@ const LiveInterview = ({ questions, sessionId }) => {
         };
 
         mediaRecorder.start(1000);
+        recordingStartRef.current = Date.now();
+        currentAnswerRef.current = null;
+        answerWindowsRef.current = [];
         nextQuestion();
     };
 
+    const _nowSec = () => {
+        if (!recordingStartRef.current) return 0;
+        return Math.max(0, (Date.now() - recordingStartRef.current) / 1000);
+    };
+
+    const beginAnswerWindow = (idx) => {
+        if (!recordingStartRef.current) return;
+        currentAnswerRef.current = { idx, start_sec: _nowSec() };
+    };
+
+    const closeCurrentAnswerWindow = () => {
+        const cur = currentAnswerRef.current;
+        if (cur && recordingStartRef.current) {
+            const end_sec = _nowSec();
+            if (end_sec > cur.start_sec) {
+                answerWindowsRef.current.push({
+                    question_idx: cur.idx,
+                    start_sec: cur.start_sec,
+                    end_sec: end_sec,
+                });
+            }
+        }
+        currentAnswerRef.current = null;
+    };
+
     const nextQuestion = async () => {
+        // Close the previous question's answering window (if any) before moving on.
+        closeCurrentAnswerWindow();
+
         const nextIndex = currentQuestionIndex + 1;
         if (nextIndex >= questions.length) {
             finishInterview();
             return;
         }
 
-        // 🔥 IMMEDIATE UI UPDATE: Change question text and reset timer instantly
         setCurrentQuestionIndex(nextIndex);
         setTimeLeft(QUESTION_TIME_LIMIT);
         setIsSpeaking(true); // Don't let timer run while preparing audio
 
-        // Stop current audio if playing
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
 
@@ -259,26 +297,26 @@ const LiveInterview = ({ questions, sessionId }) => {
             audioRef.current.src = url;
             setIsSpeaking(true);
 
-            // 🔥 INSTANT PLAY: Since it's a blob, we don't need to wait for buffering
             const playPromise = audioRef.current.play();
             if (playPromise !== undefined) {
                 playPromise.catch(err => {
                     if (err.name !== 'AbortError') {
                         console.error("Audio play error:", err);
                         setIsSpeaking(false);
+                        beginAnswerWindow(nextIndex);
                     }
                 });
             }
 
             audioRef.current.onended = () => {
                 setIsSpeaking(false);
+                beginAnswerWindow(nextIndex);
             };
         };
 
         if (ttsUrls[nextIndex]) {
             playAudio(ttsUrls[nextIndex]);
         } else {
-            // Fallback: fetch it now if not already preloaded
             try {
                 const response = await fetch('http://localhost:8000/generate-tts', {
                     method: 'POST',
@@ -293,16 +331,20 @@ const LiveInterview = ({ questions, sessionId }) => {
                 if (data.url) {
                     playAudio(data.url);
                 } else {
-                    setIsSpeaking(false); // Start timer if no audio
+                    setIsSpeaking(false);
+                    beginAnswerWindow(nextIndex);
                 }
             } catch (err) {
                 console.error("Delayed TTS generation failed:", err);
-                setIsSpeaking(false); // Start timer on error
+                setIsSpeaking(false);
+                beginAnswerWindow(nextIndex);
             }
         }
     };
 
     const finishInterview = () => {
+        // Close the last in-progress answer window before stopping the recorder.
+        closeCurrentAnswerWindow();
         setIsRecording(false);
         if (mediaRecorderRef.current) {
             mediaRecorderRef.current.stop();
@@ -368,7 +410,22 @@ const LiveInterview = ({ questions, sessionId }) => {
 
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('questions', JSON.stringify(questions.map(q => q.question)));
+        formData.append('questions', JSON.stringify(
+            questions.map(q => typeof q === 'object' ? q : { question: q, type: 'General' })
+        ));
+        if (resumeContext) {
+            formData.append('resume_context', JSON.stringify({
+                domain: resumeContext.domain,
+                certifications: resumeContext.certifications || [],
+                key_skills: resumeContext.key_skills || [],
+            }));
+            if (resumeContext.resume_session_id) {
+                formData.append('resume_session_id', resumeContext.resume_session_id);
+            }
+        }
+        if (answerWindowsRef.current && answerWindowsRef.current.length > 0) {
+            formData.append('answer_windows', JSON.stringify(answerWindowsRef.current));
+        }
 
         try {
             const response = await fetch('http://localhost:8000/analyze', {

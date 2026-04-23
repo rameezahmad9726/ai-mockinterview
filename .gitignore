@@ -181,3 +181,15 @@ Thumbs.db
 
 ai-mockenv/
 uploads/
+
+# Runtime database
+*.db
+*.sqlite
+*.sqlite3
+
+# ML artifacts and processed data
+artifacts/
+models/
+data/processed/*
+!data/processed/.gitkeep
+backend/training_rows/

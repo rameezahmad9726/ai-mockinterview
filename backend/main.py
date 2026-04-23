@@ -9,7 +9,7 @@ import uuid
 import shutil
 import os
 
-from modules.question_generator import generate_questions
+from modules.question_generator import generate_questions, extract_resume_context
 from modules.tts import generate_speech, generate_speech_batch
 from modules.training_data_logger import get_training_row_log_status
 
@@ -60,7 +60,7 @@ async def get_analysis_status(session_id: str):
         return {"status": "error", "message": "Session not found"}
     return progress_store[session_id]
 
-def run_analysis_task(video_path, session_id, parsed_questions):
+def run_analysis_task(video_path, session_id, parsed_questions, resume_context=None, answer_windows=None):
     try:
         from video_processor import process_video
 
@@ -68,7 +68,14 @@ def run_analysis_task(video_path, session_id, parsed_questions):
             progress_store[session_id]["progress"] = percent
             progress_store[session_id]["status"] = message
 
-        result = process_video(str(video_path), session_id, parsed_questions, on_progress=on_progress)
+        result = process_video(
+            str(video_path),
+            session_id,
+            parsed_questions,
+            on_progress=on_progress,
+            resume_context=resume_context,
+            answer_windows=answer_windows,
+        )
         
         progress_store[session_id]["progress"] = 100
         progress_store[session_id]["status"] = "Completed"
@@ -84,10 +91,18 @@ def run_analysis_task(video_path, session_id, parsed_questions):
 async def analyze_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    questions: str = Form(None)
+    questions: str = Form(None),
+    resume_context: str = Form(None),
+    resume_session_id: str = Form(None),
+    answer_windows: str = Form(None),
 ):
     """
     Upload a video → start background analysis → return session_id.
+
+    Accepts optional `resume_context` (JSON) with keys:
+        domain, certifications (list of {name, issuer, relevant}), key_skills.
+    As a fallback, if `resume_session_id` is provided, the server looks up the
+    saved context at uploads/<resume_session_id>/resume/context.json.
     """
     session_id = str(uuid.uuid4())
     session_dir = UPLOAD_ROOT / session_id
@@ -99,16 +114,50 @@ async def analyze_video(
         shutil.copyfileobj(file.file, buffer)
 
     parsed_questions = json.loads(questions) if questions else []
-    
-    # Initialize progress
+
+    parsed_context = None
+    if resume_context:
+        try:
+            parsed_context = json.loads(resume_context)
+        except Exception as e:
+            print(f"[WARN] Could not parse resume_context: {e}")
+            parsed_context = None
+    if parsed_context is None and resume_session_id:
+        ctx_path = UPLOAD_ROOT / resume_session_id / "resume" / "context.json"
+        if ctx_path.exists():
+            try:
+                with ctx_path.open("r", encoding="utf-8") as fh:
+                    parsed_context = json.load(fh)
+            except Exception as e:
+                print(f"[WARN] Could not load resume context from {ctx_path}: {e}")
+
+    parsed_windows = None
+    if answer_windows:
+        try:
+            raw = json.loads(answer_windows)
+            if isinstance(raw, list):
+                parsed_windows = []
+                for w in raw:
+                    try:
+                        parsed_windows.append({
+                            "question_idx": int(w.get("question_idx", -1)),
+                            "start_sec": float(w.get("start_sec", 0.0)),
+                            "end_sec": float(w.get("end_sec", 0.0)),
+                        })
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"[WARN] Could not parse answer_windows: {e}")
+
     progress_store[session_id] = {"progress": 0, "status": "Uploading and initializing...", "result": None}
-    
-    # Start task in background
-    background_tasks.add_task(run_analysis_task, video_path, session_id, parsed_questions)
+
+    background_tasks.add_task(
+        run_analysis_task, video_path, session_id, parsed_questions, parsed_context, parsed_windows
+    )
 
     return {
         "status": "started",
-        "session_id": session_id
+        "session_id": session_id,
     }
 
 
@@ -129,23 +178,44 @@ async def analyze_resume(file: UploadFile = File(...)):
     try:
         from modules.resume_parser import parse_resume
 
-        # 1. Parse Text
         resume_text = parse_resume(str(file_path))
-        
-        # 2. Generate Questions
-        questions_data = generate_questions(resume_text)
-        if questions_data.get("error"):
-            # Surface API errors to the client for debugging
-            return {
-                "status": "error",
-                "message": questions_data["error"],
-                "questions": questions_data.get("questions", []),
+
+        context = extract_resume_context(resume_text)
+        if context.get("error") and not context.get("questions"):
+            fallback = generate_questions(resume_text)
+            if fallback.get("error"):
+                return {
+                    "status": "error",
+                    "message": context.get("error") or fallback.get("error"),
+                    "questions": fallback.get("questions", []),
+                }
+            context = {
+                "domain": "General",
+                "certifications": [],
+                "key_skills": [],
+                "questions": fallback.get("questions", []),
             }
+
+        persisted = {
+            "domain": context.get("domain", "General"),
+            "certifications": context.get("certifications", []),
+            "key_skills": context.get("key_skills", []),
+            "questions": context.get("questions", []),
+            "resume_text_snippet": (resume_text or "")[:4000],
+        }
+        try:
+            with (session_dir / "context.json").open("w", encoding="utf-8") as fh:
+                json.dump(persisted, fh, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[WARN] Could not persist resume context.json: {e}")
 
         return {
             "status": "success",
             "session_id": session_id,
-            "questions": questions_data.get("questions", []),
+            "domain": persisted["domain"],
+            "certifications": persisted["certifications"],
+            "key_skills": persisted["key_skills"],
+            "questions": persisted["questions"],
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -216,6 +286,21 @@ def get_tts_file(session_id: str, filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="TTS file not found")
     return FileResponse(path=str(file_path))
+
+
+@app.get("/frames/{session_id}/{filename}")
+def get_lacking_frame(session_id: str, filename: str):
+    """
+    Serve a persisted representative frame for a lacking interval.
+    Saved by the video pipeline under uploads/<session_id>/lacking_frames/.
+    Path traversal is blocked by filename restriction.
+    """
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    file_path = Path("uploads") / session_id / "lacking_frames" / filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Frame not found")
+    return FileResponse(path=str(file_path), media_type="image/jpeg")
 
 
 @app.get("/reports/{filename}")

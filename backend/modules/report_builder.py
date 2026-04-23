@@ -8,6 +8,172 @@ def _safe_get(d, key, default=None):
     return d.get(key) if isinstance(d, dict) else default
 
 
+_TIER_STYLE = {
+    "strong_hire":     {"bg": "#dcfce7", "border": "#16a34a", "emoji": "🌟", "text": "#065f46"},
+    "hire":            {"bg": "#ecfdf5", "border": "#22c55e", "emoji": "✅", "text": "#065f46"},
+    "borderline":      {"bg": "#fef3c7", "border": "#f59e0b", "emoji": "⚠️", "text": "#92400e"},
+    "not_recommended": {"bg": "#fee2e2", "border": "#ef4444", "emoji": "❌", "text": "#991b1b"},
+}
+
+
+def _issue_label(issue: str) -> str:
+    return {
+        "low_eye_contact": "low eye contact",
+        "poor_posture": "poor posture",
+        "low_confidence": "low confidence",
+        "excessive_movement": "excessive movement",
+        "very_still": "very still / stiff",
+    }.get(issue, issue.replace("_", " "))
+
+
+def _fmt_time(sec: float) -> str:
+    sec = max(0.0, float(sec))
+    m = int(sec // 60)
+    s = int(sec % 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def _build_scoring_html(scoring: dict, recommendation: dict) -> str:
+    if not scoring:
+        return ""
+    total = scoring.get("total_0_100")
+    rec = scoring.get("recommendation") or recommendation or {}
+    tier = rec.get("tier") or "borderline"
+    style = _TIER_STYLE.get(tier, _TIER_STYLE["borderline"])
+
+    cert = scoring.get("certification_score") or {}
+    ans = scoring.get("answer_score") or {}
+    beh = scoring.get("behavior_score") or {}
+    domain = scoring.get("domain") or "General"
+
+    def bar(value, max_value, color):
+        pct = 0 if not max_value else max(0.0, min(1.0, float(value) / float(max_value))) * 100.0
+        return (
+            f'<div style="background:#e5e7eb;border-radius:999px;height:10px;overflow:hidden;margin-top:4px;">'
+            f'<div style="width:{pct:.1f}%;height:100%;background:{color};"></div></div>'
+        )
+
+    header = (
+        f'<div class="card" style="padding:22px;background:{style["bg"]};border:2px solid {style["border"]};'
+        f'border-radius:14px;margin-bottom:24px;">'
+        f'<div style="display:flex;align-items:flex-start;gap:14px;">'
+        f'<div style="font-size:36px;line-height:1;">{style["emoji"]}</div>'
+        f'<div style="flex:1;">'
+        f'<div style="font-size:22px;font-weight:700;color:{style["text"]};">'
+        f'{html.escape(rec.get("label", "Result"))}'
+        f' &nbsp;<span style="font-size:14px;font-weight:500;color:#374151;">'
+        f'Domain: {html.escape(str(domain))}</span></div>'
+        f'<div style="font-size:40px;font-weight:800;color:{style["text"]};margin-top:4px;">'
+        f'{total if total is not None else "—"}<span style="font-size:18px;color:#6b7280;">/100</span></div>'
+        f'<p style="margin-top:6px;color:#374151;font-size:14px;line-height:1.5;">'
+        f'{html.escape(rec.get("summary", ""))}</p>'
+        f'</div></div>'
+    )
+
+    def row(title, value, max_v, color, rationale):
+        return (
+            f'<div style="padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:baseline;">'
+            f'<strong style="color:#111827;font-size:14px;">{title}</strong>'
+            f'<span style="font-weight:700;color:#111827;">{value:.1f}/{max_v}</span></div>'
+            f'{bar(value, max_v, color)}'
+            f'<p style="margin:6px 0 0 0;color:#6b7280;font-size:12px;line-height:1.5;">'
+            f'{html.escape(rationale or "")}</p>'
+            f'</div>'
+        )
+
+    rows = (
+        row("Candidate Answers (Domain Knowledge)",
+            ans.get("total_0_60", 0.0), 60, "#2563eb", ans.get("rationale", ""))
+        + row("Behavior & Emotions",
+              beh.get("total_0_20", 0.0), 20, "#8b5cf6", beh.get("rationale", ""))
+        + row("Certifications",
+              cert.get("total_0_20", 0.0), 20, "#0ea5e9", cert.get("rationale", ""))
+    )
+
+    breakdown = (
+        f'<div style="display:grid;gap:10px;margin-top:14px;">{rows}</div>'
+        f'</div>'  # closes header card
+    )
+    return header + breakdown
+
+
+def _build_interview_notes_html(notes: list) -> str:
+    if not notes:
+        return ""
+    items = []
+    for n in notes:
+        score = n.get("answer_score_0_10", 0.0)
+        bg = "#ecfdf5" if score >= 7 else "#fef3c7" if score >= 4 else "#fee2e2"
+        qtype = n.get("question_type", "General")
+        items.append(
+            f'<div style="padding:14px 16px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;margin-bottom:10px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+            f'<div><span style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#6b7280;">'
+            f'Q{n.get("question_idx", 0) + 1} · {html.escape(str(qtype))}</span>'
+            f'<div style="font-weight:600;color:#111827;margin-top:2px;">{html.escape(n.get("question", ""))}</div></div>'
+            f'<span style="background:{bg};padding:4px 10px;border-radius:999px;font-weight:700;color:#111827;">'
+            f'{score:.1f}/10</span></div>'
+            f'<div style="margin-top:10px;padding:10px 12px;background:#f9fafb;border-left:3px solid #60a5fa;'
+            f'border-radius:6px;color:#1f2937;font-size:13px;white-space:pre-wrap;">'
+            f'{html.escape(n.get("candidate_answer", ""))}</div>'
+            f'<p style="margin:8px 0 0 0;color:#6b7280;font-size:12px;line-height:1.5;"><em>'
+            f'{html.escape(n.get("evaluation", ""))}</em></p>'
+            f'</div>'
+        )
+    return (
+        '<h2>Interview Notes</h2>'
+        '<p class="subtitle">Candidate answer per scheduled question with evaluation.</p>'
+        + "".join(items)
+    )
+
+
+def _build_lacking_intervals_html(intervals: list) -> str:
+    if not intervals:
+        return (
+            '<h2>Moments to Improve</h2>'
+            '<p class="subtitle" style="color:#059669;">No significant weak intervals detected during the recording.</p>'
+        )
+    sev_color = {"minor": "#f59e0b", "moderate": "#ea580c", "severe": "#dc2626"}
+    rows = []
+    for iv in intervals:
+        color = sev_color.get(iv.get("severity", "minor"), "#f59e0b")
+        issues = ", ".join(_issue_label(i) for i in (iv.get("issues") or []))
+        frame_urls = iv.get("frame_paths") or []
+        thumbs_html = ""
+        if frame_urls:
+            thumb_imgs = "".join(
+                f'<img src="{html.escape(url)}" alt="lacking frame" '
+                f'style="width:110px;height:82px;object-fit:cover;border-radius:6px;'
+                f'border:1px solid #e5e7eb;background:#f3f4f6;" loading="lazy" />'
+                for url in frame_urls
+            )
+            thumbs_html = (
+                f'<div style="display:flex;gap:6px;flex-wrap:wrap;">{thumb_imgs}</div>'
+            )
+        else:
+            thumbs_html = '<span style="color:#9ca3af;font-size:12px;">—</span>'
+
+        rows.append(
+            f'<tr>'
+            f'<td>{_fmt_time(iv.get("start_sec", 0))} – {_fmt_time(iv.get("end_sec", 0))}</td>'
+            f'<td>{iv.get("start_frame", 0)} – {iv.get("end_frame", 0)}</td>'
+            f'<td>{html.escape(issues)}</td>'
+            f'<td>{thumbs_html}</td>'
+            f'<td><span style="background:{color};color:#fff;padding:2px 10px;border-radius:999px;'
+            f'font-size:11px;text-transform:uppercase;letter-spacing:0.05em;">{html.escape(iv.get("severity","minor"))}</span></td>'
+            f'</tr>'
+        )
+    return (
+        '<h2>Moments to Improve</h2>'
+        '<p class="subtitle">Timestamps / frame ranges where the candidate showed weak signals.</p>'
+        '<div class="table-wrapper"><table>'
+        '<thead><tr><th>Time</th><th>Frames</th><th>Issues</th><th>Preview</th><th>Severity</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody>'
+        '</table></div>'
+    )
+
+
 def _build_transcript_html(speech):
     """Build HTML for transcript with speaker separation if available."""
     formatted_transcript = _safe_get(speech, "formatted_transcript", [])
@@ -73,6 +239,7 @@ def build_html_report(report: dict) -> str:
     _cf = summary.get("confidence_score")
     confidence_score = "N/A" if _cf is None else _cf
     recommendation = _safe_get(summary, "recommendation", {})
+    scoring = _safe_get(report, "scoring", {}) or {}
 
     frames_analyzed = _safe_get(emotion, "frames_analyzed", 0)
     emotion_counts = _safe_get(emotion, "emotion_counts", {})
@@ -99,49 +266,10 @@ def build_html_report(report: dict) -> str:
     # Pretty JSON block (optional, for debugging)
     pretty_json = html.escape(json.dumps(report, indent=2, ensure_ascii=False))
 
-    # Build detailed recommendation HTML
-    recommendation_html = ""
-    if recommendation.get("label"):
-        rec_bg = "#dcfce7" if recommendation.get("recommended") else "#fef3c7"
-        rec_border = "#22c55e" if recommendation.get("recommended") else "#f59e0b"
-        recommendation_html = f'<div class="card" style="margin-bottom: 24px; padding: 20px; background: {rec_bg}; border: 2px solid {rec_border}; border-radius: 12px;">'
-        recommendation_html += f'<strong style="font-size: 18px;">{"✅ Recommended" if recommendation.get("recommended") else "⚠️ Not Recommended"}</strong>'
-        if recommendation.get("summary"):
-            recommendation_html += f'<p style="margin-top: 8px; color: #374151; font-weight: 500;">{html.escape(recommendation.get("summary", ""))}</p>'
-        if recommendation.get("reason"):
-            recommendation_html += f'<p style="margin-top: 4px; color: #4b5563; font-size: 14px;">{html.escape(recommendation.get("reason", ""))}</p>'
-        strengths = recommendation.get("strengths") or []
-        if strengths:
-            recommendation_html += '<h4 style="margin-top: 16px; font-size: 12px; color: #059669; text-transform: uppercase; letter-spacing: 0.05em;">Strengths</h4><ul style="margin: 8px 0 0 16px; padding: 0;">'
-            for s in strengths:
-                score_str = ""
-                if s.get("score") is not None:
-                    if s.get("metric") == "Speaking pace":
-                        score_str = f" ({s['score']:.0f} WPM)"
-                    elif s.get("metric") == "Filler words":
-                        score_str = f" ({s['score']} detected)"
-                    else:
-                        score_str = f" ({s['score']}/10)"
-                recommendation_html += f'<li style="margin-bottom: 6px; color: #374151;"><strong>{html.escape(s.get("metric", ""))}</strong>{score_str}: {html.escape(s.get("feedback", ""))}</li>'
-            recommendation_html += "</ul>"
-        areas = recommendation.get("areas_to_improve") or []
-        if areas:
-            recommendation_html += '<h4 style="margin-top: 16px; font-size: 12px; color: #d97706; text-transform: uppercase; letter-spacing: 0.05em;">Areas to Improve</h4><ul style="margin: 8px 0 0 16px; padding: 0;">'
-            for a in areas:
-                score_str = ""
-                if a.get("score") is not None:
-                    if a.get("metric") == "Speaking pace":
-                        score_str = f" ({a['score']:.0f} WPM)"
-                    elif a.get("metric") == "Filler words":
-                        score_str = f" ({a['score']} detected)"
-                    else:
-                        score_str = f" ({a['score']}/10)"
-                recommendation_html += f'<li style="margin-bottom: 8px; color: #374151;"><strong>{html.escape(a.get("metric", ""))}</strong>{score_str}: {html.escape(a.get("feedback", ""))}'
-                if a.get("suggestion"):
-                    recommendation_html += f'<p style="margin: 4px 0 0 12px; font-size: 13px; color: #6b7280; font-style: italic; border-left: 2px solid #f59e0b; padding-left: 8px;">💡 {html.escape(a.get("suggestion", ""))}</p>'
-                recommendation_html += "</li>"
-            recommendation_html += "</ul>"
-        recommendation_html += "</div>"
+    # ------- New scoring-based recommendation + breakdown -------
+    recommendation_html = _build_scoring_html(scoring, recommendation)
+    notes_html = _build_interview_notes_html(scoring.get("interview_notes") or [])
+    lacking_html = _build_lacking_intervals_html(scoring.get("lacking_intervals") or [])
 
     html_doc = f"""<!DOCTYPE html>
 <html lang="en">
@@ -291,8 +419,14 @@ def build_html_report(report: dict) -> str:
         Generated on <strong>{created_at}</strong>
     </div>
 
-    <!-- Recommendation -->
+    <!-- Recommendation + scoring breakdown -->
     {recommendation_html}
+
+    <!-- Interview notes (Q/A/evaluation per question) -->
+    {notes_html}
+
+    <!-- Moments to improve (lacking frame intervals) -->
+    {lacking_html}
 
     <!-- Overview -->
     <h2>Overview</h2>

@@ -7,14 +7,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from modules.report_builder import save_html_report
 from modules.audio_extractor import extract_audio
 from modules.speech_analysis import SpeechAnalyzer
-from modules.behavior_analysis import build_behavior_insights
+from modules.behavior_analysis import build_behavior_insights, merge_per_frame_signals
 from modules.model_inference.behavior_fusion import infer_behavior_confidence
 from modules.model_inference.speech_scorer import infer_speech_clarity
 from modules.training_data_logger import build_training_row, append_training_row_jsonl
+from modules.scoring import compute_final_scoring, final_scoring_to_dict
 
-# Speed vs quality: fewer frames + higher subsample = faster analysis (slightly less accurate)
-MAX_FRAMES = int(os.environ.get("INTERVEUX_MAX_FRAMES", "20"))  # default 20 for speed (raise for more coverage)
-SUBSAMPLE_STEP = int(os.environ.get("INTERVEUX_SUBSAMPLE_STEP", "4"))  # process every Nth frame (4 = faster)
+# Laptop-friendly defaults (Dell-class ultrabook); override via env for GPU/production.
+# ~60 frames @ 1fps ≈ 1 min coverage; subsample 3 → ~20 frames per vision modality.
+MAX_FRAMES = int(os.environ.get("INTERVEUX_MAX_FRAMES", "60"))
+SUBSAMPLE_STEP = int(os.environ.get("INTERVEUX_SUBSAMPLE_STEP", "3"))
+FRAME_WIDTH = int(os.environ.get("INTERVEUX_FRAME_WIDTH", "480"))
+FRAME_HEIGHT = int(os.environ.get("INTERVEUX_FRAME_HEIGHT", "360"))
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -61,8 +65,7 @@ def extract_frames(video_path, output_dir, fps=1):
             break
             
         if current_frame % interval == 0:
-            # Resize for speed; lower JPEG quality (85) for faster I/O
-            frame_small = cv2.resize(frame, (320, 240))
+            frame_small = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
             path = os.path.join(output_dir, f"frame_{saved}.jpg")
             cv2.imwrite(path, frame_small, [cv2.IMWRITE_JPEG_QUALITY, 85])
             saved += 1
@@ -140,8 +143,10 @@ def run_speech_analysis(audio_path, questions=None):
     return _get_speech_analyzer().analyze_audio(audio_path, questions)
 
 
-def _compute_recommendation(emotion, body, speech, c_score, conf_score):
-    """Compute detailed recommendation with specific strengths and areas to improve."""
+def _compute_recommendation_legacy(emotion, body, speech, c_score, conf_score):  # noqa: C901
+    """DEPRECATED: retained for reference only. The authoritative recommendation
+    now comes from modules.scoring.compute_final_scoring. This function is no
+    longer invoked by the pipeline."""
     insufficient = speech.get("insufficient_candidate_speech") or speech.get("candidate_speech_detected") is False
     # If no or insufficient candidate speech (user didn't answer / barely participated), always Not Recommended
     if insufficient:
@@ -349,8 +354,6 @@ def build_final_report(emotion, body, speech, audio_path):
         c_score = None
         conf_score = None
 
-    recommendation = _compute_recommendation(emotion, body, speech, c_score or 5, conf_score or 5)
-
     return {
         "emotion_analysis": emotion,
         "body_language": body,
@@ -367,12 +370,11 @@ def build_final_report(emotion, body, speech, audio_path):
             "insufficient_candidate_speech": insufficient,
             "tone_analysis": speech.get("tone_analysis"),
             "improvement_tip": speech.get("improvement_tip"),
-            "recommendation": recommendation,
         }
     }
 
 
-def process_video(video_path, session_id=None, questions=None, on_progress=None):
+def process_video(video_path, session_id=None, questions=None, on_progress=None, resume_context=None, answer_windows=None):
     def update_progress(percent, message):
         if on_progress:
             on_progress(percent, message)
@@ -396,7 +398,10 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
 
     # Load speech model on main thread first (Whisper can fail when loaded from worker threads)
     update_progress(38, "Loading speech model...")
-    _get_speech_analyzer()._ensure_model_loaded()
+    # Skip loading local Whisper when using OpenAI transcription API (saves RAM/time on weak CPUs).
+    _oa = os.environ.get("INTERVEUX_OPENAI_WHISPER", "true").strip().lower()
+    if _oa in ("0", "false", "no"):
+        _get_speech_analyzer()._ensure_model_loaded()
 
     # Parallel analysis: speech, emotion, body, eye contact (independent after extraction)
     speech = None
@@ -496,11 +501,11 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
             "eye_contact_available": False,
         }
 
-    update_progress(90, "Generating final report and insights...")
+    update_progress(82, "Building behavior insights...")
     print("[STEP] Creating final report...")
 
     # Optional learned speech score (phase rollout, disabled by default).
-    use_learned_speech = _env_bool("USE_LEARNED_SPEECH_MODEL", default=False)
+    use_learned_speech = _env_bool("USE_LEARNED_SPEECH_MODEL", default=True)
     speech_inference = infer_speech_clarity(speech)
     if use_learned_speech and speech_inference.model_loaded and speech_inference.clarity_score is not None:
         speech["clarity_score"] = round(float(speech_inference.clarity_score), 2)
@@ -511,24 +516,25 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
     heuristic_behavior = dict(behavior_insights)
 
     # Optional learned behavior confidence score (phase rollout, disabled by default).
-    use_learned_behavior = _env_bool("USE_LEARNED_BEHAVIOR_MODEL", default=False)
+    use_learned_behavior = _env_bool("USE_LEARNED_BEHAVIOR_MODEL", default=True)
     dual_run = _env_bool("USE_DUAL_RUN_MODE", default=True)
     behavior_inference = infer_behavior_confidence(report, behavior_insights)
     if use_learned_behavior and behavior_inference.model_loaded and behavior_inference.confidence_score is not None:
         learned_conf_0_1 = max(0.0, min(1.0, behavior_inference.confidence_score / 10.0))
         behavior_insights["confidence_score"] = round(learned_conf_0_1, 3)
         report["final_summary"]["confidence_score"] = round(float(behavior_inference.confidence_score), 2)
-        report["final_summary"]["recommendation"] = _compute_recommendation(
-            emotion_data,
-            body_data,
-            speech,
-            report["final_summary"].get("clarity_score") or 5,
-            report["final_summary"].get("confidence_score") or 5,
-        )
 
     report["behavior_insights"] = behavior_insights
+    learned_applied = (
+        (use_learned_speech and speech_inference.model_loaded and speech_inference.clarity_score is not None)
+        or (
+            use_learned_behavior
+            and behavior_inference.model_loaded
+            and behavior_inference.confidence_score is not None
+        )
+    )
     report["model_metadata"] = {
-        "inference_mode": "learned" if (use_learned_behavior or use_learned_speech) else "heuristic",
+        "inference_mode": "learned" if learned_applied else "heuristic",
         "flags": {
             "USE_LEARNED_BEHAVIOR_MODEL": use_learned_behavior,
             "USE_LEARNED_SPEECH_MODEL": use_learned_speech,
@@ -553,8 +559,79 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None)
         }
 
     # ---------------------------------------------------
+    # New scoring (100 marks): certs 20 + answers 60 + behavior 20
+    # + interview notes + lacking frame intervals + recommendation.
+    # Output is structured as DB-ready records (see modules/scoring.py).
+    # ---------------------------------------------------
+    update_progress(87, "Scoring answers against resume (LLM)...")
+    try:
+        frames_data = merge_per_frame_signals(
+            emotion_data.get("emotion_per_frame"),
+            body_data.get("posture_per_frame"),
+            eye_data.get("eye_contact_per_frame"),
+        )
+        final_scoring = compute_final_scoring(
+            questions=questions,
+            resume_context=resume_context or {},
+            speech=speech,
+            emotion=emotion_data,
+            body=body_data,
+            behavior_insights=behavior_insights,
+            frames_data=frames_data,
+            answer_windows=answer_windows or [],
+        )
+        scoring_dict = final_scoring_to_dict(final_scoring)
+        update_progress(94, "Saving lacking-interval preview frames...")
+
+        # Persist representative frames for each lacking interval so the UI
+        # can show them. Copy the tmp frame jpg into uploads/<session>/lacking_frames/
+        # and rewrite frame_paths to public URLs served by /frames/<session>/<name>.
+        try:
+            import shutil as _sh
+            uploads_root = Path(__file__).resolve().parent / "uploads"
+            persist_id = session_id or Path(video_path).stem
+            persisted_dir = uploads_root / persist_id / "lacking_frames"
+            persisted_dir.mkdir(parents=True, exist_ok=True)
+            public_base = os.environ.get("INTERVEUX_PUBLIC_BASE_URL", "http://localhost:8000")
+            for idx, iv in enumerate(scoring_dict.get("lacking_intervals") or []):
+                new_urls: list = []
+                for j, src_path in enumerate(iv.get("frame_paths") or []):
+                    try:
+                        src = Path(src_path)
+                        if not src.exists():
+                            continue
+                        dst_name = f"lacking_{idx:02d}_{j}{src.suffix or '.jpg'}"
+                        dst = persisted_dir / dst_name
+                        _sh.copy2(src, dst)
+                        new_urls.append(f"{public_base}/frames/{persist_id}/{dst_name}")
+                    except Exception as _e:
+                        print(f"[WARN] Could not persist lacking frame {src_path}: {_e}")
+                iv["frame_paths"] = new_urls
+        except Exception as _e:
+            print(f"[WARN] Failed to persist lacking frames: {_e}")
+
+        report["scoring"] = scoring_dict
+        # Surface headline numbers into final_summary for quick access.
+        report["final_summary"]["total_score_0_100"] = scoring_dict["total_0_100"]
+        report["final_summary"]["recommendation"] = scoring_dict["recommendation"]
+        report["final_summary"]["domain"] = scoring_dict["domain"]
+        # Echo resume context so the frontend can display what was used.
+        if resume_context:
+            report["resume_context"] = {
+                "domain": resume_context.get("domain"),
+                "certifications": resume_context.get("certifications", []),
+                "key_skills": resume_context.get("key_skills", []),
+            }
+    except Exception as e:
+        import traceback as _tb
+        _tb.print_exc()
+        print(f"[ERROR] Scoring engine failed: {e}")
+        report["scoring"] = {"error": str(e)}
+
+    # ---------------------------------------------------
     # Save JSON + HTML
     # ---------------------------------------------------
+    update_progress(97, "Writing report...")
 
     reports_dir = Path(__file__).resolve().parent / "reports"
     reports_dir.mkdir(exist_ok=True)

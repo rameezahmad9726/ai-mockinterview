@@ -18,9 +18,11 @@ def _extract_from_pdf(file_path: str) -> str:
     import pdfplumber
 
     text = ""
+    # Read up to 6 pages — 3 was too tight and cut off late sections such as
+    # "Certifications & Achievements" on some 2-3 page resumes where the
+    # section spills onto page 4 in exports.
     with pdfplumber.open(file_path) as pdf:
-        # Limit to first 3 pages for maximum speed
-        for page in pdf.pages[:3]:
+        for page in pdf.pages[:6]:
             extracted = page.extract_text()
             if extracted:
                 text += extracted + "\n"
