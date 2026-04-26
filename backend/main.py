@@ -13,7 +13,31 @@ from modules.question_generator import generate_questions, extract_resume_contex
 from modules.tts import generate_speech, generate_speech_batch
 from modules.training_data_logger import get_training_row_log_status
 
+from db import init_db
+from routes import admin as admin_routes
+from routes import auth_routes
+from routes import candidate as candidate_routes
+from services.reminder_jobs import start_scheduler, stop_scheduler
+
 app = FastAPI()
+
+
+@app.on_event("startup")
+def _on_startup() -> None:
+    """Initialize the DB schema and start the background scheduler."""
+    init_db()
+    if os.environ.get("INTERVEUX_ENABLE_SCHEDULER", "true").strip().lower() in {"1", "true", "yes", "on"}:
+        start_scheduler()
+
+
+@app.on_event("shutdown")
+def _on_shutdown() -> None:
+    stop_scheduler()
+
+
+app.include_router(auth_routes.router)
+app.include_router(admin_routes.router)
+app.include_router(candidate_routes.router)
 
 # Allow frontend to connect
 app.add_middleware(

@@ -1,7 +1,32 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MicrophoneIcon, VideoCameraIcon, StopIcon, SpeakerWaveIcon, ChevronRightIcon, PlayIcon } from '@heroicons/react/24/outline';
 
-const LiveInterview = ({ questions, sessionId, resumeContext }) => {
+/**
+ * Props:
+ *   questions, sessionId, resumeContext — as before
+ *   customUpload?:  async ({ blob, answerWindows, questions }) => {}
+ *                   When provided, replaces the default POST /analyze flow.
+ *                   Should throw on failure. Return value is passed to customPoll (if any).
+ *   customPoll?:    async () => { progress, status, done, result?, error? }
+ *                   When provided, replaces the default /analysis-status polling.
+ *   onAnalysisDone?: (result) => void — called once when analysis finishes.
+ *                    Suppresses the built-in ResultsDisplay swap so the host page
+ *                    can render its own completion screen.
+ *   autoUploadOnFinish?: boolean — automatically uploads as soon as recording ends.
+ *   waitForAnalysis?: boolean — if false, considers flow complete after upload starts.
+ *   hidePostInterviewActions?: boolean — hides upload/download controls after recording.
+ */
+const LiveInterview = ({
+    questions,
+    sessionId,
+    resumeContext,
+    customUpload,
+    customPoll,
+    onAnalysisDone,
+    autoUploadOnFinish = false,
+    waitForAnalysis = true,
+    hidePostInterviewActions = false,
+}) => {
     const [isRecording, setIsRecording] = useState(false);
     const [currentQuestionIndex, setCurrentQuestionIndex] = useState(-1);
     const [isSpeaking, setIsSpeaking] = useState(false);
@@ -369,8 +394,34 @@ const LiveInterview = ({ questions, sessionId, resumeContext }) => {
     const [analysisStatus, setAnalysisStatus] = useState("");
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [analysisResult, setAnalysisResult] = useState(null);
+    const autoUploadStartedRef = useRef(false);
 
     const pollAnalysisStatus = async (sid) => {
+        // Candidate-flow override: host page drives status via customPoll and
+        // owns the completion screen, so this component just reports progress.
+        if (customPoll) {
+            try {
+                const data = await customPoll();
+                setAnalysisProgress(data.progress || 0);
+                setAnalysisStatus(data.status || "");
+                if (data.error) {
+                    alert("Analysis failed: " + data.error);
+                    setIsAnalyzing(false);
+                    return;
+                }
+                if (data.done) {
+                    setIsAnalyzing(false);
+                    if (onAnalysisDone) onAnalysisDone(data.result || null);
+                    return;
+                }
+                setTimeout(() => pollAnalysisStatus(sid), 2000);
+            } catch (err) {
+                console.error("Custom poll error:", err);
+                setTimeout(() => pollAnalysisStatus(sid), 5000);
+            }
+            return;
+        }
+
         try {
             const response = await fetch(`http://localhost:8000/analysis-status/${sid}`);
             const data = await response.json();
@@ -393,6 +444,7 @@ const LiveInterview = ({ questions, sessionId, resumeContext }) => {
                     report_html_path: data.result.report_html_path,
                 });
                 setIsAnalyzing(false);
+                if (onAnalysisDone) onAnalysisDone(data.result || null);
             } else {
                 // Continue polling
                 setTimeout(() => pollAnalysisStatus(sid), 2000);
@@ -404,8 +456,34 @@ const LiveInterview = ({ questions, sessionId, resumeContext }) => {
     };
 
     const handleUpload = async () => {
+        if (!recordedChunks.length) {
+            alert("No interview recording found to upload.");
+            return;
+        }
         setIsUploading(true);
         const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const answerWindows = answerWindowsRef.current || [];
+
+        // Candidate-flow override: host page is responsible for the upload
+        // (it knows the candidate token) and for kicking off polling.
+        if (customUpload) {
+            try {
+                await customUpload({ blob, answerWindows, questions });
+                if (waitForAnalysis) {
+                    setIsAnalyzing(true);
+                    pollAnalysisStatus(sessionId);
+                } else if (onAnalysisDone) {
+                    onAnalysisDone(null);
+                }
+            } catch (err) {
+                console.error("Custom upload failed:", err);
+                alert("Failed to upload: " + (err?.message || err));
+            } finally {
+                setIsUploading(false);
+            }
+            return;
+        }
+
         const file = new File([blob], `interview_${sessionId}.webm`, { type: 'video/webm' });
 
         const formData = new FormData();
@@ -423,8 +501,8 @@ const LiveInterview = ({ questions, sessionId, resumeContext }) => {
                 formData.append('resume_session_id', resumeContext.resume_session_id);
             }
         }
-        if (answerWindowsRef.current && answerWindowsRef.current.length > 0) {
-            formData.append('answer_windows', JSON.stringify(answerWindowsRef.current));
+        if (answerWindows.length > 0) {
+            formData.append('answer_windows', JSON.stringify(answerWindows));
         }
 
         try {
@@ -435,8 +513,12 @@ const LiveInterview = ({ questions, sessionId, resumeContext }) => {
             const data = await response.json();
 
             if (data.status === "started") {
-                setIsAnalyzing(true);
-                pollAnalysisStatus(data.session_id);
+                if (waitForAnalysis) {
+                    setIsAnalyzing(true);
+                    pollAnalysisStatus(data.session_id);
+                } else if (onAnalysisDone) {
+                    onAnalysisDone(null);
+                }
             } else {
                 const errorMsg = data.detail || data.message || "Unknown error";
                 alert(`Failed to start analysis: ${errorMsg}`);
@@ -448,6 +530,14 @@ const LiveInterview = ({ questions, sessionId, resumeContext }) => {
             setIsUploading(false);
         }
     };
+
+    useEffect(() => {
+        if (!autoUploadOnFinish || !isFinished || isUploading || isAnalyzing) return;
+        if (autoUploadStartedRef.current) return;
+        if (!recordedChunks.length) return;
+        autoUploadStartedRef.current = true;
+        handleUpload();
+    }, [autoUploadOnFinish, isFinished, isUploading, isAnalyzing, recordedChunks]);
 
     const downloadVideo = () => {
         const blob = new Blob(recordedChunks, { type: 'video/webm' });
@@ -625,21 +715,28 @@ const LiveInterview = ({ questions, sessionId, resumeContext }) => {
                                 <p className="text-slate-400">Great job! Your interview has been recorded and is ready for analysis.</p>
                             </div>
 
-                            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                                <button
-                                    onClick={handleUpload}
-                                    disabled={isUploading}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-full font-bold min-w-[200px] flex items-center justify-center transition-all disabled:opacity-50"
-                                >
-                                    {isUploading ? "Uploading..." : "Upload for Analysis"}
-                                </button>
-                                <button
-                                    onClick={downloadVideo}
-                                    className="border border-slate-600 hover:bg-slate-700 text-white px-8 py-3 rounded-full font-bold min-w-[200px] transition-all"
-                                >
-                                    Download Recording
-                                </button>
-                            </div>
+                            {!hidePostInterviewActions && (
+                                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                                    <button
+                                        onClick={handleUpload}
+                                        disabled={isUploading}
+                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-full font-bold min-w-[200px] flex items-center justify-center transition-all disabled:opacity-50"
+                                    >
+                                        {isUploading ? "Uploading..." : "Upload for Analysis"}
+                                    </button>
+                                    <button
+                                        onClick={downloadVideo}
+                                        className="border border-slate-600 hover:bg-slate-700 text-white px-8 py-3 rounded-full font-bold min-w-[200px] transition-all"
+                                    >
+                                        Download Recording
+                                    </button>
+                                </div>
+                            )}
+                            {hidePostInterviewActions && (
+                                <p className="text-slate-500 text-sm">
+                                    Uploading your interview in the background...
+                                </p>
+                            )}
                         </>
                     )}
                 </div>
