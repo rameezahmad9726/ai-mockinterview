@@ -45,6 +45,23 @@ UPLOAD_ROOT = Path(os.environ.get("INTERVEUX_UPLOAD_ROOT", "uploads"))
 UPLOAD_ROOT.mkdir(exist_ok=True)
 
 
+def _effective_passing_threshold(job) -> int:
+    """
+    Resolve the report "passing mark" in a way that matches current HR usage.
+
+    Historically, many jobs only changed `auto_reject_threshold` while leaving
+    `shortlist_threshold` at its default (80). In that case, using shortlist as
+    the pass mark incorrectly looks "fixed at 80".
+    """
+    shortlist = int(job.shortlist_threshold or 60)
+    auto_reject = int(job.auto_reject_threshold or 40)
+    # If shortlist was never customized (still default 80) but auto-reject was,
+    # treat auto-reject as the effective pass mark for report messaging/tiering.
+    if shortlist == 60 and auto_reject != 40:
+        return auto_reject
+    return shortlist
+
+
 def _session_dep(token: str, db: Session = Depends(get_db)) -> InterviewSession:
     return get_session_by_token(token, db)
 
@@ -97,6 +114,25 @@ def _trim_questions(questions: list, limit: int) -> list:
         out.append({"type": q.get("type", "General"), "question": text})
         if len(out) >= limit:
             break
+    return out
+
+
+def _ensure_question_count(questions: list, limit: int, job_title: str) -> list:
+    """
+    Guarantee exactly `limit` questions even when the LLM returns duplicates/fewer
+    items than requested.
+    """
+    out = list(questions or [])[:limit]
+    idx = len(out) + 1
+    while len(out) < limit:
+        out.append({
+            "type": "Behavioral",
+            "question": (
+                f"Question {idx}: Tell us about a relevant experience for the {job_title} role "
+                "and the impact you made."
+            ),
+        })
+        idx += 1
     return out
 
 
@@ -154,6 +190,7 @@ async def upload_resume(
             "resume_text_snippet": resume_text[:4000],
         }
         questions = _trim_questions(context.get("questions") or [], sess.job.num_questions)
+        questions = _ensure_question_count(questions, sess.job.num_questions, sess.job.title)
     except Exception as e:  # pragma: no cover - depends on optional libs
         log.exception("Resume processing failed")
         resume_context = {"error": str(e)[:500]}
@@ -163,6 +200,7 @@ async def upload_resume(
         questions = [
             {"type": "Behavioral", "question": f"Tell us about your experience relevant to the {sess.job.title} role."}
         ]
+    questions = _ensure_question_count(questions, sess.job.num_questions, sess.job.title)
 
     sess.resume_context = resume_context
     sess.questions = questions
@@ -248,6 +286,7 @@ def _run_analysis(external_id: str) -> None:
                 on_progress=on_progress,
                 resume_context=sess.resume_context,
                 answer_windows=sess.answer_windows,
+                passing_threshold_0_100=_effective_passing_threshold(sess.job),
             )
 
             report_payload = (result or {}).get("report") or {}

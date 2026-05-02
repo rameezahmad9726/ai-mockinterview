@@ -134,6 +134,38 @@ function IntegrityList({ flags }) {
   );
 }
 
+function AnalysisProgress({ status, progress, message, error }) {
+  const isProcessing = ['submitted', 'analyzing'].includes(status);
+  const pct = Math.max(0, Math.min(100, Number(progress || 0)));
+  const statusLabel = status === 'submitted' ? 'Queued for analysis' : 'Analyzing interview';
+  const etaLabel = pct >= 95 ? 'Wrapping up...' : pct >= 70 ? 'Almost done...' : pct >= 30 ? 'Processing...' : 'Starting...';
+
+  if (!isProcessing && status !== 'failed') return null;
+
+  return (
+    <div className={`border rounded-xl p-4 ${status === 'failed' ? 'bg-red-950/40 border-red-800' : 'bg-amber-950/30 border-amber-800/70'}`}>
+      {status === 'failed' ? (
+        <p className="text-sm text-red-200">
+          Analysis failed{error ? `: ${error}` : '.'}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-amber-200">{statusLabel}</p>
+            <p className="text-xs text-amber-300">{pct}%</p>
+          </div>
+          <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="text-xs text-amber-100/90">
+            {message || etaLabel}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CandidateDetail() {
   const { externalId } = useParams();
   const [data, setData] = useState(null);
@@ -303,6 +335,13 @@ export default function CandidateDetail() {
         <Stat label="Submitted" value={data.submitted_at ? new Date(data.submitted_at).toLocaleDateString() : '—'} />
         <Stat label="Integrity flags" value={(data.integrity_flags || []).length} />
       </div>
+
+      <AnalysisProgress
+        status={data.status}
+        progress={data.progress}
+        message={data.progress_message}
+        error={data.error_message}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">

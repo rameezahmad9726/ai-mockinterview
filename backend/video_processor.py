@@ -374,7 +374,15 @@ def build_final_report(emotion, body, speech, audio_path):
     }
 
 
-def process_video(video_path, session_id=None, questions=None, on_progress=None, resume_context=None, answer_windows=None):
+def process_video(
+    video_path,
+    session_id=None,
+    questions=None,
+    on_progress=None,
+    resume_context=None,
+    answer_windows=None,
+    passing_threshold_0_100=60,
+):
     def update_progress(percent, message):
         if on_progress:
             on_progress(percent, message)
@@ -579,6 +587,7 @@ def process_video(video_path, session_id=None, questions=None, on_progress=None,
             behavior_insights=behavior_insights,
             frames_data=frames_data,
             answer_windows=answer_windows or [],
+            passing_threshold_0_100=passing_threshold_0_100,
         )
         scoring_dict = final_scoring_to_dict(final_scoring)
         update_progress(94, "Saving lacking-interval preview frames...")

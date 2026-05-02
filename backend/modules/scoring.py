@@ -697,6 +697,7 @@ def build_recommendation(
     answer_score: AnswerScoreResult,
     behavior_score: BehaviorScoreResult,
     insufficient: bool,
+    passing_threshold_0_100: float = 60.0,
 ) -> Recommendation:
     if insufficient:
         return Recommendation(
@@ -708,15 +709,20 @@ def build_recommendation(
             total_score_0_100=round(total_0_100, 2),
         )
 
+    pass_mark = _clamp(_safe_float(passing_threshold_0_100, 60.0), 0.0, 100.0)
+
     if total_0_100 >= 90:
         tier, label = "strong_hire", "Strong Hire"
         verdict = f"Excellent fit for the {domain} role — strong domain knowledge, solid credentials, and composed delivery."
     elif total_0_100 >= 75:
         tier, label = "hire", "Hire"
         verdict = f"Good candidate for the {domain} role. Minor gaps can be addressed during onboarding."
-    elif total_0_100 >= 60:
+    elif total_0_100 >= pass_mark:
         tier, label = "borderline", "Borderline / Needs Follow-up"
-        verdict = f"Partial fit for the {domain} role. Recommend a second interview focused on the weak areas below."
+        verdict = (
+            f"Meets the configured passing threshold ({pass_mark:.0f}) for the {domain} role, "
+            "but should go through follow-up review/interview on weaker areas."
+        )
     else:
         tier, label = "not_recommended", "Not Recommended"
         verdict = f"Does not meet the bar for the {domain} role in this interview; domain knowledge and/or delivery need significant improvement."
@@ -751,6 +757,7 @@ def compute_final_scoring(
     behavior_insights: Dict[str, Any],
     frames_data: List[Dict[str, Any]],
     answer_windows: Optional[List[Dict[str, Any]]] = None,
+    passing_threshold_0_100: float = 60.0,
 ) -> FinalScoring:
     """
     Single entry-point. Takes all raw pipeline outputs + resume context and
@@ -799,6 +806,7 @@ def compute_final_scoring(
         answer_score=answer_result,
         behavior_score=behavior_result,
         insufficient=insufficient,
+        passing_threshold_0_100=passing_threshold_0_100,
     )
 
     return FinalScoring(

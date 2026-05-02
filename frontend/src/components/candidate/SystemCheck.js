@@ -9,17 +9,80 @@ export default function SystemCheck({ onReady }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const rafRef = useRef(null);
+  const audioCtxRef = useRef(null);
   const [error, setError] = useState(null);
   const [cameraOk, setCameraOk] = useState(false);
   const [micOk, setMicOk] = useState(false);
   const [level, setLevel] = useState(0);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
 
+    const cleanup = () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+        audioCtxRef.current.close();
+        audioCtxRef.current = null;
+      }
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+
+    const formatError = (e) => {
+      if (!e) return 'Could not access camera/microphone';
+      if (e.name === 'NotReadableError') {
+        return 'Device is currently in use by another app/tab. Close Zoom/Meet/Teams/other tabs and retry';
+      }
+      if (e.name === 'NotAllowedError') {
+        return 'Permission blocked. Please allow camera and microphone in browser site settings';
+      }
+      if (e.name === 'NotFoundError') {
+        return 'No camera/microphone detected on this device';
+      }
+      return e.message || 'Could not access camera/microphone';
+    };
+
+    const tryGetUserMedia = async () => {
+      const attempts = [
+        { video: true, audio: true },
+        {
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        },
+        { video: { facingMode: 'user' }, audio: true }
+      ];
+
+      let lastError = null;
+      for (const constraints of attempts) {
+        try {
+          return await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      throw lastError || new Error('Could not access camera/microphone');
+    };
+
     const start = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        cleanup();
+        setError(null);
+        setCameraOk(false);
+        setMicOk(false);
+        setLevel(0);
+
+        const stream = await tryGetUserMedia();
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -30,6 +93,7 @@ export default function SystemCheck({ onReady }) {
 
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         const ctx = new AudioCtx();
+        audioCtxRef.current = ctx;
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
@@ -51,7 +115,7 @@ export default function SystemCheck({ onReady }) {
         };
         loop();
       } catch (e) {
-        setError(e.message || 'Could not access camera/microphone');
+        setError(formatError(e));
       }
     };
 
@@ -59,10 +123,9 @@ export default function SystemCheck({ onReady }) {
 
     return () => {
       cancelled = true;
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+      cleanup();
     };
-  }, []);
+  }, [attempt]);
 
   return (
     <div className="space-y-6">
@@ -72,8 +135,14 @@ export default function SystemCheck({ onReady }) {
       </div>
 
       {error ? (
-        <div className="bg-red-950/60 border border-red-800 text-red-200 rounded-lg p-4 text-sm">
-          Camera/mic access failed: {error}. Check your browser permissions and try again.
+        <div className="bg-red-950/60 border border-red-800 text-red-200 rounded-lg p-4 text-sm space-y-3">
+          <p>Camera/mic access failed: {error}.</p>
+          <button
+            onClick={() => setAttempt((n) => n + 1)}
+            className="inline-flex items-center rounded-md bg-red-800 hover:bg-red-700 px-3 py-1.5 text-xs font-semibold text-red-100"
+          >
+            Retry system check
+          </button>
         </div>
       ) : (
         <>

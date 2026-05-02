@@ -127,6 +127,8 @@ def update_job(
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    prev_auto_reject = job.auto_reject_threshold
+    prev_shortlist = job.shortlist_threshold
     for field, value in body.dict(exclude_unset=True).items():
         setattr(job, field, value)
     db.commit()
@@ -140,6 +142,52 @@ def update_job(
         entity_id=str(job.id),
     ))
     db.commit()
+
+    # If score thresholds changed, re-run auto-decision for already scored sessions
+    # so HR doesn't need to click "Re-run decision" one-by-one.
+    thresholds_changed = (
+        prev_auto_reject != job.auto_reject_threshold
+        or prev_shortlist != job.shortlist_threshold
+    )
+    if thresholds_changed:
+        from services.decision_engine import run_for_session
+
+        company = os.environ.get("COMPANY_NAME", "Interveux")
+        scored_sessions = (
+            db.query(InterviewSession)
+            .filter(
+                InterviewSession.job_id == job.id,
+                InterviewSession.status == SessionStatus.SCORED,
+            )
+            .all()
+        )
+        recomputed = 0
+        for sess in scored_sessions:
+            try:
+                run_for_session(db, sess.external_id, company=company)
+                recomputed += 1
+            except Exception:
+                log.exception(
+                    "Failed auto decision recompute for session %s after job %s threshold update",
+                    sess.external_id,
+                    job.id,
+                )
+
+        db.add(AuditLog(
+            actor_user_id=current.id,
+            actor_type=ActorType.HR,
+            action="decision.recompute_on_threshold_change",
+            entity_type="job",
+            entity_id=str(job.id),
+            meta={
+                "prev_auto_reject_threshold": prev_auto_reject,
+                "new_auto_reject_threshold": job.auto_reject_threshold,
+                "prev_shortlist_threshold": prev_shortlist,
+                "new_shortlist_threshold": job.shortlist_threshold,
+                "recomputed_sessions": recomputed,
+            },
+        ))
+        db.commit()
     return job
 
 
@@ -451,6 +499,9 @@ def _summarize(sess: InterviewSession) -> dict:
         "invited_at": sess.invited_at,
         "expires_at": sess.expires_at,
         "submitted_at": sess.submitted_at,
+        "progress": int(sess.progress or 0),
+        "progress_message": sess.progress_message,
+        "error_message": sess.error_message,
         "overall_score": sess.report.overall_score if sess.report else None,
         "decision": sess.decision.status if sess.decision else None,
     }

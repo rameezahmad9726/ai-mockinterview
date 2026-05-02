@@ -20,6 +20,7 @@ const LiveInterview = ({
     questions,
     sessionId,
     resumeContext,
+    secondsPerAnswer = 60,
     customUpload,
     customPoll,
     onAnalysisDone,
@@ -37,8 +38,8 @@ const LiveInterview = ({
     const [ttsUrls, setTtsUrls] = useState({});
     const [isPreloading, setIsPreloading] = useState(false);
     const [isFirstQuestionReady, setIsFirstQuestionReady] = useState(false);
-    const QUESTION_TIME_LIMIT = 60;
-    const [timeLeft, setTimeLeft] = useState(QUESTION_TIME_LIMIT);
+    const questionTimeLimit = Number(secondsPerAnswer) > 0 ? Number(secondsPerAnswer) : 60;
+    const [timeLeft, setTimeLeft] = useState(questionTimeLimit);
 
     const audioContextRef = useRef(null);
     const mixedStreamRef = useRef(null);
@@ -66,7 +67,7 @@ const LiveInterview = ({
             nextQuestion();
         }
         return () => clearInterval(timer);
-    }, [isRecording, isSpeaking, currentQuestionIndex, timeLeft]);
+    }, [isRecording, isSpeaking, currentQuestionIndex, timeLeft, questionTimeLimit]);
 
     const formatTime = (seconds) => {
         const mins = Math.floor(seconds / 60);
@@ -259,14 +260,22 @@ const LiveInterview = ({
 
         setIsRecording(true);
         setRecordedChunks([]);
+        recordedChunksRef.current = [];
+        setRecorderStopped(false);
 
         const mediaRecorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm' });
         mediaRecorderRef.current = mediaRecorder;
 
         mediaRecorder.ondataavailable = (e) => {
             if (e.data.size > 0) {
+                recordedChunksRef.current.push(e.data);
                 setRecordedChunks(prev => [...prev, e.data]);
             }
+        };
+
+        mediaRecorder.onstop = () => {
+            // Ensure final buffered media has been flushed before auto-upload.
+            setRecorderStopped(true);
         };
 
         mediaRecorder.start(1000);
@@ -312,7 +321,7 @@ const LiveInterview = ({
         }
 
         setCurrentQuestionIndex(nextIndex);
-        setTimeLeft(QUESTION_TIME_LIMIT);
+        setTimeLeft(questionTimeLimit);
         setIsSpeaking(true); // Don't let timer run while preparing audio
 
         audioRef.current.pause();
@@ -395,6 +404,8 @@ const LiveInterview = ({
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [analysisResult, setAnalysisResult] = useState(null);
     const autoUploadStartedRef = useRef(false);
+    const recordedChunksRef = useRef([]);
+    const [recorderStopped, setRecorderStopped] = useState(false);
 
     const pollAnalysisStatus = async (sid) => {
         // Candidate-flow override: host page drives status via customPoll and
@@ -456,12 +467,13 @@ const LiveInterview = ({
     };
 
     const handleUpload = async () => {
-        if (!recordedChunks.length) {
+        const chunks = recordedChunksRef.current.length ? recordedChunksRef.current : recordedChunks;
+        if (!chunks.length) {
             alert("No interview recording found to upload.");
             return;
         }
         setIsUploading(true);
-        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const blob = new Blob(chunks, { type: 'video/webm' });
         const answerWindows = answerWindowsRef.current || [];
 
         // Candidate-flow override: host page is responsible for the upload
@@ -532,15 +544,16 @@ const LiveInterview = ({
     };
 
     useEffect(() => {
-        if (!autoUploadOnFinish || !isFinished || isUploading || isAnalyzing) return;
+        if (!autoUploadOnFinish || !isFinished || !recorderStopped || isUploading || isAnalyzing) return;
         if (autoUploadStartedRef.current) return;
-        if (!recordedChunks.length) return;
+        if (!recordedChunksRef.current.length && !recordedChunks.length) return;
         autoUploadStartedRef.current = true;
         handleUpload();
-    }, [autoUploadOnFinish, isFinished, isUploading, isAnalyzing, recordedChunks]);
+    }, [autoUploadOnFinish, isFinished, recorderStopped, isUploading, isAnalyzing, recordedChunks]);
 
     const downloadVideo = () => {
-        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const chunks = recordedChunksRef.current.length ? recordedChunksRef.current : recordedChunks;
+        const blob = new Blob(chunks, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none';
@@ -612,7 +625,7 @@ const LiveInterview = ({
                             {/* Visual Progress Bar */}
                             <div
                                 className={`absolute top-0 left-0 h-1 transition-all duration-1000 ${timeLeft < 15 ? 'bg-red-500' : 'bg-indigo-500'}`}
-                                style={{ width: `${(timeLeft / QUESTION_TIME_LIMIT) * 100}%` }}
+                                style={{ width: `${(timeLeft / questionTimeLimit) * 100}%` }}
                             ></div>
 
                             <div className="flex items-center justify-between mb-2">

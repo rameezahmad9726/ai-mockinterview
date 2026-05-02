@@ -99,8 +99,8 @@ class Job(Base):
     link_expiry_hours: Mapped[int] = mapped_column(Integer, default=72, nullable=False)
 
     # Decisioning thresholds (0–100)
-    auto_reject_threshold: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
-    shortlist_threshold: Mapped[int] = mapped_column(Integer, default=80, nullable=False)
+    auto_reject_threshold: Mapped[int] = mapped_column(Integer, default=40, nullable=False)
+    shortlist_threshold: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
 
     # Calendly / human-round self-booking link
     calendly_url: Mapped[Optional[str]] = mapped_column(String(1024))

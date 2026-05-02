@@ -30,6 +30,22 @@ function Pill({ children, className = '' }) {
   );
 }
 
+function ProgressCell({ status, progress, message }) {
+  const show = ['submitted', 'analyzing'].includes(status);
+  if (!show) return null;
+  const pct = Math.max(0, Math.min(100, Number(progress || 0)));
+  return (
+    <div className="mt-2 w-44">
+      <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+        <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${pct}%` }} />
+      </div>
+      <p className="text-[11px] text-slate-400 mt-1 truncate">
+        {message || `${pct}% complete`}
+      </p>
+    </div>
+  );
+}
+
 export default function JobDetail() {
   const { jobId } = useParams();
   const navigate = useNavigate();
@@ -91,6 +107,13 @@ export default function JobDetail() {
   }, [jobId]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const hasInFlightAnalysis = sessions.some((s) => ['submitted', 'analyzing'].includes(s.status));
+    if (!hasInFlightAnalysis) return;
+    const timer = setInterval(() => load(), 3000);
+    return () => clearInterval(timer);
+  }, [sessions, load]);
 
   const onResend = async (externalId) => {
     try {
@@ -208,6 +231,11 @@ export default function JobDetail() {
                     </td>
                     <td className="px-5 py-3">
                       <Pill className={STATUS_COLORS[s.status] || 'bg-slate-700 text-slate-200'}>{s.status}</Pill>
+                      <ProgressCell
+                        status={s.status}
+                        progress={s.progress}
+                        message={s.progress_message}
+                      />
                     </td>
                     <td className="px-5 py-3 text-slate-200">{s.overall_score?.toFixed?.(1) ?? '—'}</td>
                     <td className="px-5 py-3">

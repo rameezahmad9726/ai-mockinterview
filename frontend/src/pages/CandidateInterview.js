@@ -176,6 +176,7 @@ export default function CandidateInterview() {
         <LiveInterview
           questions={session.questions || []}
           sessionId={session.session_external_id}
+          secondsPerAnswer={session.seconds_per_answer}
           resumeContext={null /* already on server */}
           customUpload={customUpload}
           onAnalysisDone={onSubmitted}

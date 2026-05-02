@@ -129,6 +129,9 @@ class SessionSummary(BaseModel):
     invited_at: datetime
     expires_at: datetime
     submitted_at: Optional[datetime] = None
+    progress: int = 0
+    progress_message: Optional[str] = None
+    error_message: Optional[str] = None
     overall_score: Optional[float] = None
     decision: Optional[DecisionStatus] = None
 
