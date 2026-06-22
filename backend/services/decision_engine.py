@@ -36,7 +36,7 @@ from models import (
 )
 from services.email_service import send_email
 from services.email_templates import render_reject, render_shortlist
-from services.llm_summary import generate_summary
+from services.llm_summary import ensure_report_summary
 
 log = logging.getLogger("interveux.decision")
 
@@ -122,10 +122,19 @@ def _queue_email(
     return log_row.id
 
 
-def run_for_session(db: Session, session_external_id: str, company: str) -> Optional[Decision]:
+def run_for_session(
+    db: Session,
+    session_external_id: str,
+    company: str,
+    *,
+    force: bool = False,
+) -> Optional[Decision]:
     """
     Load a finished session, generate the LLM summary, apply thresholds,
     write the Decision row, and queue the candidate outcome email.
+
+    When ``force`` is True (explicit HR "re-run decision"), manual HR
+    decisions are replaced by a fresh auto-decision.
     """
     sess = (
         db.query(InterviewSession)
@@ -141,16 +150,13 @@ def run_for_session(db: Session, session_external_id: str, company: str) -> Opti
         log.info("Decision engine: no report for session %s; skipping", session_external_id)
         return None
 
-    # 1) LLM summary (best-effort).
-    if not report.ai_summary:
-        summary = generate_summary(
-            report.raw_report or {},
-            sess.job.title,
-            sess.job.required_skills or [],
-        )
-        if summary:
-            report.ai_summary = summary
-            db.commit()
+    # 1) LLM / fallback summary (best-effort).
+    ensure_report_summary(
+        report,
+        sess.job.title,
+        sess.job.required_skills or [],
+    )
+    db.commit()
 
     # 2) Auto-decision.
     severe = _is_severe_integrity(sess.integrity_flags or [])
@@ -162,8 +168,8 @@ def run_for_session(db: Session, session_external_id: str, company: str) -> Opti
     )
 
     existing = sess.decision
-    if existing and existing.actor_type == ActorType.HR:
-        # Don't overwrite a manual HR decision.
+    if existing and existing.actor_type == ActorType.HR and not force:
+        # Don't overwrite a manual HR decision unless HR explicitly re-runs.
         log.info("Decision engine: manual decision exists for %s; skipping auto", session_external_id)
         return existing
 

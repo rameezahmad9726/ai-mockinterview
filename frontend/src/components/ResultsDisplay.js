@@ -474,33 +474,6 @@ export default function ResultsDisplay({ results }) {
               </p>
             </div>
           </div>
-          {speech.transcript && (
-            <div className="mt-4 bg-slate-700 rounded-lg p-4">
-              <p className="text-slate-400 text-xs mb-3 uppercase tracking-wider font-semibold">Transcript</p>
-              {speech.formatted_transcript && speech.formatted_transcript.length > 0 ? (
-                <div className="space-y-4 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
-                  {speech.formatted_transcript.map((segment, idx) => (
-                    <div key={idx} className="flex flex-col">
-                      <span className={`text-[10px] font-bold mb-1 uppercase ${segment.speaker === 'Interviewer' ? 'text-blue-400' : 'text-emerald-400'
-                        }`}>
-                        {segment.speaker}
-                      </span>
-                      <div className={`p-3 rounded-lg text-sm border ${segment.speaker === 'Interviewer'
-                        ? 'bg-blue-900/20 border-blue-500/30 text-blue-100'
-                        : 'bg-emerald-900/20 border-emerald-500/30 text-emerald-100'
-                        }`}>
-                        {segment.text}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="bg-slate-900/50 p-3 rounded border border-slate-600">
-                  <p className="text-slate-200 text-sm leading-relaxed">{speech.transcript}</p>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 

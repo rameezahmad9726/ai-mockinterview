@@ -95,8 +95,19 @@ def give_consent(
     if sess.status == SessionStatus.INVITED:
         sess.status = SessionStatus.STARTED
         sess.started_at = datetime.utcnow()
-        db.commit()
-        db.refresh(sess)
+
+    # Retake: resume on file but questions cleared — generate a fresh set.
+    if sess.resume_path and not sess.questions:
+        prior = []
+        if isinstance(sess.resume_context, dict):
+            prior = list(sess.resume_context.get("_prior_questions") or [])
+        try:
+            _regenerate_session_questions(sess, db, previous_questions=prior)
+        except Exception:
+            log.exception("Failed to regenerate questions for session %s", sess.external_id)
+
+    db.commit()
+    db.refresh(sess)
     return _summarize(sess)
 
 
@@ -136,6 +147,86 @@ def _ensure_question_count(questions: list, limit: int, job_title: str) -> list:
     return out
 
 
+def _build_questions_from_resume(
+    resume_text: str,
+    job,
+    *,
+    previous_questions: Optional[list] = None,
+) -> tuple[dict[str, Any], list]:
+    """Parse resume text and return (resume_context, questions)."""
+    from modules.question_generator import extract_resume_context, generate_questions
+
+    prior = list(previous_questions or [])
+    context = extract_resume_context(
+        resume_text,
+        previous_questions=prior,
+        num_questions=job.num_questions,
+    ) or {}
+
+    if context.get("error") and not context.get("questions"):
+        fallback = generate_questions(
+            resume_text,
+            previous_questions=prior,
+            num_questions=job.num_questions,
+        )
+        context = {
+            "domain": "General",
+            "certifications": [],
+            "key_skills": [],
+            "questions": fallback.get("questions", []),
+            "error": fallback.get("error"),
+        }
+
+    resume_context: dict[str, Any] = {
+        "domain": context.get("domain", "General"),
+        "certifications": context.get("certifications", []),
+        "key_skills": context.get("key_skills", []),
+        "resume_text_snippet": resume_text[:4000],
+    }
+    questions = _trim_questions(context.get("questions") or [], job.num_questions)
+    questions = _ensure_question_count(questions, job.num_questions, job.title)
+    return resume_context, questions
+
+
+def _regenerate_session_questions(
+    sess: InterviewSession,
+    db: Session,
+    *,
+    previous_questions: Optional[list] = None,
+) -> None:
+    """Rebuild questions from the stored resume (retake / consent path)."""
+    if not sess.resume_path or not Path(sess.resume_path).exists():
+        return
+    from modules.resume_parser import parse_resume
+
+    prior = list(previous_questions or sess.questions or [])
+    resume_text = parse_resume(sess.resume_path) or ""
+    resume_context, questions = _build_questions_from_resume(
+        resume_text,
+        sess.job,
+        previous_questions=prior,
+    )
+    if not questions:
+        questions = _ensure_question_count(
+            [],
+            sess.job.num_questions,
+            sess.job.title,
+        )
+    sess.resume_context = resume_context
+    sess.questions = questions
+
+    session_dir = Path(sess.resume_path).parent
+    try:
+        ctx_path = session_dir / "context.json"
+        with ctx_path.open("w", encoding="utf-8") as fh:
+            json.dump(
+                {**resume_context, "questions": questions},
+                fh, ensure_ascii=False, indent=2,
+            )
+    except Exception as e:
+        log.warning("Could not persist context.json: %s", e)
+
+
 @router.post("/{token}/resume", response_model=CandidateInterviewInfo)
 async def upload_resume(
     file: UploadFile = File(...),
@@ -161,36 +252,18 @@ async def upload_resume(
 
     sess.resume_path = str(dest)
 
-    # Parse + generate questions. Failures are non-fatal: candidate can still
-    # submit a video, but we fall back to a stub question list so the flow
-    # doesn't block on OpenAI availability.
+    previous_questions = list(sess.questions or [])
     resume_context: dict[str, Any] = {}
     questions: list = []
     try:
-        from modules.question_generator import extract_resume_context, generate_questions
         from modules.resume_parser import parse_resume
 
         resume_text = parse_resume(str(dest)) or ""
-        context = extract_resume_context(resume_text) or {}
-
-        if context.get("error") and not context.get("questions"):
-            fallback = generate_questions(resume_text)
-            context = {
-                "domain": "General",
-                "certifications": [],
-                "key_skills": [],
-                "questions": fallback.get("questions", []),
-                "error": fallback.get("error"),
-            }
-
-        resume_context = {
-            "domain": context.get("domain", "General"),
-            "certifications": context.get("certifications", []),
-            "key_skills": context.get("key_skills", []),
-            "resume_text_snippet": resume_text[:4000],
-        }
-        questions = _trim_questions(context.get("questions") or [], sess.job.num_questions)
-        questions = _ensure_question_count(questions, sess.job.num_questions, sess.job.title)
+        resume_context, questions = _build_questions_from_resume(
+            resume_text,
+            sess.job,
+            previous_questions=previous_questions,
+        )
     except Exception as e:  # pragma: no cover - depends on optional libs
         log.exception("Resume processing failed")
         resume_context = {"error": str(e)[:500]}
@@ -301,6 +374,10 @@ def _run_analysis(external_id: str) -> None:
                 **{k: v for k, v in scoring.items() if k not in {"total_0_100", "recommendation", "domain"}},
             }
 
+            if sess.report:
+                db.delete(sess.report)
+                db.flush()
+
             report_row = Report(
                 session_id=sess.id,
                 overall_score=overall,
@@ -309,6 +386,13 @@ def _run_analysis(external_id: str) -> None:
                 raw_report=report_payload,
                 report_json_path=result.get("report_json_path"),
                 report_html_path=result.get("report_html_path"),
+            )
+            from services.llm_summary import ensure_report_summary
+
+            ensure_report_summary(
+                report_row,
+                sess.job.title,
+                sess.job.required_skills or [],
             )
             db.add(report_row)
             sess.status = SessionStatus.SCORED

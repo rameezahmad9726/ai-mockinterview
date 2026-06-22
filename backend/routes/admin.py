@@ -47,6 +47,7 @@ from schemas import (
     JobCreate,
     JobOut,
     JobUpdate,
+    RerunDecisionResponse,
     SessionDetail,
     SessionSummary,
 )
@@ -349,7 +350,7 @@ def bulk_invite(
     return BulkInviteResult(created=created, skipped=skipped, session_ids=session_ids)
 
 
-@router.post("/sessions/{external_id}/rerun-decision")
+@router.post("/sessions/{external_id}/rerun-decision", response_model=RerunDecisionResponse)
 def rerun_decision(
     external_id: str,
     db: Session = Depends(get_db),
@@ -357,8 +358,8 @@ def rerun_decision(
 ):
     """
     Re-run the auto-decision engine on an already-analyzed session. Useful
-    after HR adjusts the job's thresholds. Does NOT overwrite manual HR
-    decisions; the decision engine respects those.
+    after HR adjusts the job's thresholds. Overwrites any prior decision
+    (including manual HR picks) with a fresh system decision.
     """
     sess = db.query(InterviewSession).filter(InterviewSession.external_id == external_id).first()
     if not sess:
@@ -368,20 +369,66 @@ def rerun_decision(
 
     from services.decision_engine import run_for_session
 
+    prev = sess.decision
+    prev_status = prev.status if prev else None
+    was_manual = bool(prev and prev.actor_type == ActorType.HR)
+
     company = os.environ.get("COMPANY_NAME", "Interveux")
-    decision = run_for_session(db, sess.external_id, company=company)
+    decision = run_for_session(db, sess.external_id, company=company, force=True)
     db.add(AuditLog(
         actor_user_id=current.id,
         actor_type=ActorType.HR,
         action="decision.rerun",
         entity_type="session",
         entity_id=sess.external_id,
+        meta={
+            "previous_status": prev_status.value if prev_status else None,
+            "new_status": decision.status.value if decision else None,
+            "was_manual": was_manual,
+        },
     ))
     db.commit()
-    return {
-        "status": decision.status.value if decision else None,
-        "reason": decision.reason if decision else None,
-    }
+    new_status = decision.status if decision else None
+    return RerunDecisionResponse(
+        status=new_status,
+        reason=decision.reason if decision else None,
+        unchanged=new_status == prev_status,
+        skipped_manual=False,
+    )
+
+
+@router.post("/sessions/{external_id}/generate-summary", response_model=SessionDetail)
+def generate_session_summary(
+    external_id: str,
+    db: Session = Depends(get_db),
+    current: User = Depends(require_hr),
+):
+    """Generate (or regenerate) the AI hiring-manager summary for a scored session."""
+    sess = db.query(InterviewSession).filter(InterviewSession.external_id == external_id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not sess.report:
+        raise HTTPException(status_code=409, detail="Session has no report yet")
+    if sess.status != SessionStatus.SCORED:
+        raise HTTPException(status_code=409, detail="Summary is available after analysis completes")
+
+    from services.llm_summary import ensure_report_summary
+
+    ensure_report_summary(
+        sess.report,
+        sess.job.title,
+        sess.job.required_skills or [],
+        force=True,
+    )
+    db.add(AuditLog(
+        actor_user_id=current.id,
+        actor_type=ActorType.HR,
+        action="summary.generate",
+        entity_type="session",
+        entity_id=sess.external_id,
+    ))
+    db.commit()
+    return session_detail(external_id, db=db, _=current)
 
 
 @router.post("/sessions/{external_id}/rerun-analysis")
@@ -462,6 +509,9 @@ def resend_invite(
         sess.progress = 0
         sess.progress_message = None
         sess.error_message = None
+        prior_questions = list(sess.questions or [])
+        sess.questions = None
+        sess.resume_context = {"_prior_questions": prior_questions} if prior_questions else None
         if sess.report:
             db.delete(sess.report)
         if sess.decision:
@@ -480,7 +530,7 @@ def resend_invite(
         action="invite.resend",
         entity_type="session",
         entity_id=sess.external_id,
-        meta={"reset_for_retake": reset_for_retake},
+        meta={"reset_for_retake": reset_for_retake, "prior_questions": prior_questions if reset_for_retake else None},
     ))
     db.commit()
     background.add_task(_dispatch_invite_email, email_log.id)
@@ -504,6 +554,8 @@ def _summarize(sess: InterviewSession) -> dict:
         "error_message": sess.error_message,
         "overall_score": sess.report.overall_score if sess.report else None,
         "decision": sess.decision.status if sess.decision else None,
+        "decision_reason": sess.decision.reason if sess.decision else None,
+        "decision_source": sess.decision.actor_type.value if sess.decision else None,
     }
 
 

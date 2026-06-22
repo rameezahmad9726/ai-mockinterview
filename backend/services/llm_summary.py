@@ -126,4 +126,78 @@ def generate_summary(report: dict, job_title: str, job_skills: Optional[list[str
         "recommendation": rec,
         "headline": str(data.get("headline", ""))[:500],
         "score_rationale": str(data.get("score_rationale", ""))[:500],
+        "source": "llm",
     }
+
+
+def build_fallback_summary(report: dict, job_title: str) -> dict:
+    """Deterministic summary from scoring data when the LLM path is unavailable."""
+    scoring = report.get("scoring") or {}
+    total = scoring.get("total_0_100")
+    rec = str(scoring.get("recommendation") or "REVIEW").upper()
+    if rec not in {"SHORTLIST", "REVIEW", "REJECT"}:
+        rec = "REVIEW"
+
+    answer_block = report.get("answer_score") or scoring.get("answer_score") or {}
+    per_q = answer_block.get("per_question") if isinstance(answer_block, dict) else []
+    per_q = per_q or []
+
+    strengths: list[str] = []
+    concerns: list[str] = []
+    for q in per_q:
+        if not isinstance(q, dict):
+            continue
+        score = float(q.get("answer_score_0_10") or 0)
+        evaluation = str(q.get("evaluation") or "").strip()
+        if not evaluation:
+            continue
+        if score >= 7:
+            strengths.append(evaluation[:280])
+        elif score < 6:
+            concerns.append(evaluation[:280])
+
+    if not strengths and per_q:
+        strengths.append("Candidate completed all interview questions.")
+    if not concerns and total is not None and total < 60:
+        concerns.append(f"Overall score ({total:.1f}/100) is below typical shortlist range.")
+
+    headline = f"Interview summary for {job_title}."
+    if total is not None:
+        headline = f"Overall score {total:.1f}/100 for {job_title}."
+
+    domain = scoring.get("domain") if isinstance(scoring.get("domain"), dict) else {}
+    rationale = domain.get("rationale") or scoring.get("score_rationale")
+    if not rationale and total is not None:
+        rationale = f"Composite score {total:.1f}/100 from speech, behavior, and answer analysis."
+
+    return {
+        "strengths": strengths[:6],
+        "concerns": concerns[:6],
+        "recommendation": rec,
+        "headline": headline[:500],
+        "score_rationale": str(rationale or "")[:500],
+        "source": "fallback",
+    }
+
+
+def ensure_report_summary(
+    report_row: Any,
+    job_title: str,
+    job_skills: Optional[list[str]] = None,
+    *,
+    force: bool = False,
+) -> dict:
+    """
+    Populate ``report_row.ai_summary`` via LLM, falling back to rule-based text.
+    Returns the summary dict (existing or newly written).
+    """
+    if report_row.ai_summary and not force:
+        return report_row.ai_summary
+
+    raw = report_row.raw_report or {}
+    summary = generate_summary(raw, job_title, job_skills or [])
+    if not summary:
+        summary = build_fallback_summary(raw, job_title)
+
+    report_row.ai_summary = summary
+    return summary

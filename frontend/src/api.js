@@ -50,7 +50,25 @@ export async function apiFetch(path, options = {}) {
   }
 
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
-  const res = await fetch(url, { ...rest, headers: finalHeaders, body: finalBody });
+  const timeoutMs = options.timeoutMs ?? 15000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(url, {
+      ...rest,
+      headers: finalHeaders,
+      body: finalBody,
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new ApiError(0, 'Request timed out — is the backend running on port 8000?');
+    }
+    throw new ApiError(0, 'Cannot reach backend — start it with: python backend/main.py');
+  } finally {
+    clearTimeout(timer);
+  }
 
   const contentType = res.headers.get('content-type') || '';
   const isJson = contentType.includes('application/json');

@@ -67,17 +67,51 @@ function SubScores({ subScores }) {
   );
 }
 
-function AiSummary({ summary }) {
-  if (!summary) {
+function hasSummaryContent(summary) {
+  if (!summary) return false;
+  return Boolean(
+    summary.headline
+    || summary.score_rationale
+    || summary.strengths?.length
+    || summary.concerns?.length
+    || summary.recommendation,
+  );
+}
+
+function AiSummary({ summary, status, summaryLoading, onGenerate, generating }) {
+  if (!hasSummaryContent(summary)) {
+    if (status === 'scored' && summaryLoading) {
+      return (
+        <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 text-sm text-slate-400">
+          <p>Generating AI summary…</p>
+          <p className="text-xs text-slate-500 mt-2">This usually takes a few seconds after analysis completes.</p>
+        </div>
+      );
+    }
     return (
-      <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 text-sm text-slate-500">
-        No AI summary yet. It's generated automatically after analysis; if the LLM step failed it will
-        stay empty. Re-run analysis to try again.
+      <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 text-sm text-slate-500 space-y-3">
+        <p>
+          No AI summary yet. It is generated automatically after analysis; if the LLM step failed a
+          rule-based summary can be created instead.
+        </p>
+        {status === 'scored' && onGenerate && (
+          <button
+            type="button"
+            onClick={onGenerate}
+            disabled={generating}
+            className="px-3 py-1.5 text-xs rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 text-white font-medium"
+          >
+            {generating ? 'Generating…' : 'Generate AI summary'}
+          </button>
+        )}
       </div>
     );
   }
   return (
     <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 space-y-4">
+      {summary.source === 'fallback' && (
+        <p className="text-xs text-slate-500">Rule-based summary (LLM unavailable or timed out)</p>
+      )}
       {summary.headline && (
         <p className="text-slate-200 italic">&ldquo;{summary.headline}&rdquo;</p>
       )}
@@ -211,6 +245,13 @@ export default function CandidateDetail() {
     return () => clearInterval(t);
   }, [data, load]);
 
+  // Poll while scored but the AI summary has not landed yet.
+  useEffect(() => {
+    if (!data || data.status !== 'scored' || hasSummaryContent(data.ai_summary)) return;
+    const t = setInterval(() => load(), 3000);
+    return () => clearInterval(t);
+  }, [data, load]);
+
   const setDecision = async (status) => {
     setActing(status);
     try {
@@ -253,10 +294,36 @@ export default function CandidateDetail() {
   const rerunDecision = async () => {
     setActing('rerun-decision');
     try {
-      await apiFetch(`/api/hr/sessions/${externalId}/rerun-decision`, { method: 'POST' });
+      const result = await apiFetch(`/api/hr/sessions/${externalId}/rerun-decision`, { method: 'POST' });
       await load();
+      if (result.skipped_manual) {
+        alert('Could not re-run: a manual HR decision is in place. Use the decision buttons below to change it.');
+        return;
+      }
+      const statusLabel = result.status || 'none';
+      const reason = result.reason ? `\n\n${result.reason}` : '';
+      if (result.unchanged) {
+        alert(`Auto-decision unchanged: ${statusLabel}.${reason}`);
+      } else {
+        alert(`Decision updated to ${statusLabel}.${reason}`);
+      }
     } catch (e) {
       alert(typeof e.detail === 'string' ? e.detail : 'Re-run failed');
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const generateSummary = async () => {
+    setActing('generate-summary');
+    try {
+      const updated = await apiFetch(`/api/hr/sessions/${externalId}/generate-summary`, {
+        method: 'POST',
+        timeoutMs: 60000,
+      });
+      setData(updated);
+    } catch (e) {
+      alert(typeof e.detail === 'string' ? e.detail : 'Failed to generate AI summary');
     } finally {
       setActing(null);
     }
@@ -269,6 +336,9 @@ export default function CandidateDetail() {
   const candidate = data.candidate || {};
   const overall = data.overall_score;
   const decision = data.decision;
+  const summaryLoading = data.status === 'scored'
+    && !hasSummaryContent(data.ai_summary)
+    && acting !== 'generate-summary';
 
   return (
     <div className="space-y-8">
@@ -293,7 +363,15 @@ export default function CandidateDetail() {
               ) : (
                 <Pill className="bg-slate-800 text-slate-400 border border-slate-700">no decision</Pill>
               )}
+              {data.decision_source && (
+                <span className="text-xs text-slate-500">
+                  ({data.decision_source === 'hr' ? 'manual' : 'auto'})
+                </span>
+              )}
             </div>
+            {data.decision_reason && (
+              <p className="mt-2 text-sm text-slate-400 max-w-xl">{data.decision_reason}</p>
+            )}
           </div>
           <div className="flex flex-wrap gap-2 justify-end">
             <button
@@ -316,9 +394,9 @@ export default function CandidateDetail() {
               <button
                 onClick={rerunDecision}
                 disabled={acting === 'rerun-decision'}
-                className="px-3 py-1.5 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+                className="px-3 py-1.5 text-xs rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
               >
-                Re-run decision
+                {acting === 'rerun-decision' ? 'Re-running…' : 'Re-run decision'}
               </button>
             )}
           </div>
@@ -345,7 +423,13 @@ export default function CandidateDetail() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <AiSummary summary={data.ai_summary} />
+          <AiSummary
+            summary={data.ai_summary}
+            status={data.status}
+            summaryLoading={summaryLoading}
+            onGenerate={generateSummary}
+            generating={acting === 'generate-summary'}
+          />
 
           {(reportPublicUrl || reportJson) && (
             <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-4 flex flex-wrap gap-3 text-sm">

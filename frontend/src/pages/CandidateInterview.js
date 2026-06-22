@@ -38,6 +38,7 @@ export default function CandidateInterview() {
   const [stage, setStage] = useState(STAGE.LOADING);
   const [session, setSession] = useState(null);
   const [error, setError] = useState(null);
+  const [consentLoading, setConsentLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -132,14 +133,22 @@ export default function CandidateInterview() {
 
           <button
             onClick={async () => {
+              setConsentLoading(true);
               try {
-                await apiFetch(`/api/interview/${token}/consent`, { method: 'POST', auth: false });
-              } catch (_) { /* consent is best-effort */ }
-              setStage(STAGE.SYSCHECK);
+                const info = await apiFetch(`/api/interview/${token}/consent`, { method: 'POST', auth: false, timeoutMs: 60000 });
+                setSession(info);
+                setStage(STAGE.SYSCHECK);
+              } catch (_) {
+                setError('Could not start interview. Please refresh and try again.');
+                setStage(STAGE.INVALID);
+              } finally {
+                setConsentLoading(false);
+              }
             }}
-            className="w-full py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold"
+            disabled={consentLoading}
+            className="w-full py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 text-white font-semibold"
           >
-            I consent — let's begin
+            {consentLoading ? 'Preparing your questions…' : "I consent — let's begin"}
           </button>
         </div>
       </Shell>
@@ -150,7 +159,13 @@ export default function CandidateInterview() {
     return (
       <Shell title={`${session.job_title} · Step 1 of 3`} subtitle="Camera + microphone check">
         <SystemCheck
-          onReady={() => setStage(session.has_resume ? STAGE.INTERVIEW : STAGE.RESUME)}
+          onReady={() => {
+            if (session.questions?.length > 0) {
+              setStage(STAGE.INTERVIEW);
+            } else {
+              setStage(STAGE.RESUME);
+            }
+          }}
         />
       </Shell>
     );

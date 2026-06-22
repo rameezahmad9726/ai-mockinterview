@@ -1,8 +1,10 @@
 import json
 import os
 import re
+import secrets
 import traceback
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # Resolve common env locations once.
@@ -57,7 +59,12 @@ def _get_client():
     return openai
 
 
-def generate_questions(resume_text: str) -> dict:
+def generate_questions(
+    resume_text: str,
+    *,
+    previous_questions: Optional[list] = None,
+    num_questions: int = 5,
+) -> dict:
     """
     Generates interview questions based on resume text using an LLM.
     Returns a dictionary with categorized questions or an error payload.
@@ -68,9 +75,24 @@ def generate_questions(resume_text: str) -> dict:
         # Key missing or SDK missing
         return {"error": str(e), "questions": []}
 
+    variation_nonce = secrets.token_hex(4)
+    avoid_block = ""
+    if previous_questions:
+        prior = [
+            (q.get("question") if isinstance(q, dict) else str(q)).strip()
+            for q in previous_questions
+        ]
+        prior = [p for p in prior if p]
+        if prior:
+            avoid_block = (
+                "\nDo NOT repeat or closely paraphrase these previously used questions:\n"
+                + "\n".join(f"- {p}" for p in prior[:15])
+            )
+
     prompt = f"""
     You are an expert technical interviewer. I will provide you with a candidate's resume text.
-    Your goal is to generate 5 tailored interview questions to evaluate this candidate.
+    Your goal is to generate {num_questions} tailored interview questions to evaluate this candidate.
+    Session variation id: {variation_nonce}.{avoid_block}
     
     Resume Content:
     {resume_text[:2000]}
@@ -78,6 +100,7 @@ def generate_questions(resume_text: str) -> dict:
     Instructions:
     - Return ONLY a JSON object.
     - Format: {{"questions": [{{"type": "Technical|Behavioral|Project", "question": "..."}}]}}
+    - Use fresh angles and scenarios not covered in any prior question list above.
     """
 
     try:
@@ -89,7 +112,7 @@ def generate_questions(resume_text: str) -> dict:
                     {"role": "system", "content": "You are a technical interviewer that outputs strictly JSON."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3, # Lower temperature is faster and more focused
+                temperature=0.65 if previous_questions else 0.45,
                 response_format={ "type": "json_object" }, # Use native JSON mode
                 timeout=15, # Tighten timeout
             )
@@ -386,7 +409,12 @@ def _merge_certifications(llm_certs: list, regex_certs: list) -> list:
     return regex_uniq
 
 
-def extract_resume_context(resume_text: str) -> dict:
+def extract_resume_context(
+    resume_text: str,
+    *,
+    previous_questions: Optional[list] = None,
+    num_questions: int = 5,
+) -> dict:
     """
     Single LLM call that extracts interview-relevant context from a resume:
     inferred domain, certifications list, key skills, and 5 tailored questions.
@@ -420,12 +448,27 @@ def extract_resume_context(resume_text: str) -> dict:
     # Give the LLM enough room to actually see the Certifications / Achievements
     # section — these often sit at the very end of the resume.
     resume_for_prompt = resume_text[:8000]
+    variation_nonce = secrets.token_hex(4)
+    avoid_block = ""
+    if previous_questions:
+        prior = [
+            (q.get("question") if isinstance(q, dict) else str(q)).strip()
+            for q in previous_questions
+        ]
+        prior = [p for p in prior if p]
+        if prior:
+            avoid_block = (
+                "\nDo NOT repeat or closely paraphrase these previously used questions:\n"
+                + "\n".join(f"- {p}" for p in prior[:15])
+            )
 
     prompt = f"""
 You are an expert technical interviewer and resume parser.
 
 Resume Content (first {len(resume_for_prompt)} chars):
 \"\"\"{resume_for_prompt}\"\"\"
+
+Session variation id: {variation_nonce}.{avoid_block}
 
 Perform all of the following in ONE JSON response:
 
@@ -443,8 +486,9 @@ Perform all of the following in ONE JSON response:
 
 3. List the top key technical/professional skills from the resume (max 12).
 
-4. Generate exactly 5 tailored interview questions to evaluate this candidate
+4. Generate exactly {num_questions} tailored interview questions to evaluate this candidate
    in the inferred domain (mix of Technical, Behavioral, and Project).
+   Use new angles and scenarios not covered in any prior question list above.
 
 Return ONLY a JSON object with this exact shape:
 {{
@@ -467,7 +511,7 @@ Return ONLY a JSON object with this exact shape:
                     {"role": "system", "content": "You parse resumes and output strictly JSON."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
+                temperature=0.65 if previous_questions else 0.45,
                 response_format={"type": "json_object"},
                 timeout=25,
             )
@@ -479,7 +523,7 @@ Return ONLY a JSON object with this exact shape:
                     {"role": "system", "content": "You parse resumes and output strictly JSON."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
+                temperature=0.65 if previous_questions else 0.45,
             )
             content = response["choices"][0]["message"]["content"]
 

@@ -213,13 +213,27 @@ Return ONLY a JSON object:
                     validated.append(seg)
             formatted = SpeechAnalyzer._normalize_formatted(validated)
 
-            # If no real interviewee content, override tone
-            interviewee_words = sum(len(s.get("text", "").split()) for s in formatted if s.get("speaker") == "Interviewee" and "[No audible response]" not in (s.get("text") or ""))
-            if interviewee_words == 0:
+            # If no real interviewee content, override tone — unless Whisper heard speech
+            word_count = len(transcript.split())
+            interviewee_words = sum(
+                len(s.get("text", "").split())
+                for s in formatted
+                if s.get("speaker") == "Interviewee"
+                and "[no audible response]" not in (s.get("text") or "").lower()
+            )
+            heard_enough = word_count >= 15
+            if interviewee_words == 0 and not heard_enough:
                 tone_data = {
                     "confidence_rating": 1,
                     "tone_analysis": "No candidate response detected. Speak into the microphone when answering questions.",
                     "improvement_tip": "Ensure your microphone is working and that you are speaking when it's your turn to answer.",
+                }
+            elif interviewee_words == 0 and heard_enough:
+                tone_data = {
+                    "confidence_rating": data.get("confidence_rating", 5),
+                    "tone_analysis": data.get("tone_analysis", "") or "Speech was captured; per-question attribution uses answer timestamps.",
+                    "improvement_tip": data.get("improvement_tip", ""),
+                    "diarization_degraded": True,
                 }
             else:
                 tone_data = {
@@ -227,10 +241,12 @@ Return ONLY a JSON object:
                     "tone_analysis": data.get("tone_analysis", ""),
                     "improvement_tip": data.get("improvement_tip", ""),
                 }
-            tone_data["candidate_speech_detected"] = interviewee_words > 0
+            tone_data["candidate_speech_detected"] = interviewee_words > 0 or heard_enough
             tone_data["interviewee_word_count"] = interviewee_words
-            tone_data["insufficient_candidate_speech"] = interviewee_words < 15
-            if interviewee_words < 15 and interviewee_words > 0:
+            tone_data["insufficient_candidate_speech"] = (interviewee_words < 15) and not heard_enough
+            if heard_enough and interviewee_words < 15:
+                tone_data["diarization_degraded"] = True
+            elif interviewee_words < 15 and interviewee_words > 0:
                 tone_data["improvement_tip"] = "Very little speech was captured. Speak more when answering to get a meaningful evaluation."
             print(f"DEBUG: Combined call complete. Segments: {len(formatted)}, interviewee words: {interviewee_words}")
             return formatted, tone_data
@@ -239,13 +255,15 @@ Return ONLY a JSON object:
             fallback_formatted = SpeechAnalyzer._normalize_formatted(
                 [{"speaker": "Interviewer", "text": transcript}]
             )
+            wc = len((transcript or "").split())
             return fallback_formatted, {
                 "confidence_rating": 5,
                 "tone_analysis": "Evaluation unavailable.",
                 "improvement_tip": "",
-                "candidate_speech_detected": False,
+                "candidate_speech_detected": wc >= 15,
                 "interviewee_word_count": 0,
-                "insufficient_candidate_speech": True,
+                "insufficient_candidate_speech": wc < 15,
+                "diarization_degraded": wc >= 15,
             }
 
     def _transcribe_openai_whisper(self, audio_file: Path):
@@ -262,12 +280,26 @@ Return ONLY a JSON object:
                 model=model,
                 file=fh,
                 language="en",
+                response_format="verbose_json",
+                timestamp_granularities=["segment"],
             )
         text = (getattr(resp, "text", None) or "").strip()
+        segments = []
+        for seg in getattr(resp, "segments", None) or []:
+            seg_text = (getattr(seg, "text", None) or "").strip()
+            if not seg_text:
+                continue
+            segments.append({
+                "start": float(getattr(seg, "start", 0) or 0),
+                "end": float(getattr(seg, "end", 0) or 0),
+                "text": seg_text,
+            })
         with wave.open(str(audio_file), "rb") as w:
             rate = float(w.getframerate() or 16000)
             duration = w.getnframes() / rate if rate > 0 else 0.0
-        return text, float(duration)
+        if duration <= 0 and segments:
+            duration = float(max(s.get("end", 0) for s in segments))
+        return text, float(duration), segments
 
     def analyze_audio(self, audio_path: str, questions=None):
         try:
@@ -292,10 +324,11 @@ Return ONLY a JSON object:
             fast_speech = os.environ.get("INTERVEUX_FAST_SPEECH", "").strip().lower() in ("1", "true", "yes")
             transcript = None
             duration = None
+            transcript_segments: list = []
 
             if _use_openai_whisper_api() and not fast_speech:
                 try:
-                    transcript, duration = self._transcribe_openai_whisper(audio_file)
+                    transcript, duration, transcript_segments = self._transcribe_openai_whisper(audio_file)
                     print(
                         f"[INFO] Transcribed via OpenAI "
                         f"{os.environ.get('OPENAI_WHISPER_MODEL', 'whisper-1')} (set INTERVEUX_OPENAI_WHISPER=false for local CPU Whisper)."
@@ -331,6 +364,15 @@ Return ONLY a JSON object:
                     audio_np = audio_data.astype(np.float32)
                     result = self.model.transcribe(audio_np, language="en", verbose=False, fp16=use_fp16)
                     transcript = (result.get("text") or "").strip()
+                    transcript_segments = [
+                        {
+                            "start": float(s.get("start", 0) or 0),
+                            "end": float(s.get("end", 0) or 0),
+                            "text": (s.get("text") or "").strip(),
+                        }
+                        for s in (result.get("segments") or [])
+                        if (s.get("text") or "").strip()
+                    ]
                     if duration <= 0 and result.get("segments"):
                         duration = float(max(s.get("end", 0) for s in result["segments"]))
                 else:
@@ -340,6 +382,15 @@ Return ONLY a JSON object:
                     audio_np = audio_data.astype(np.float32)
                     result = self.model.transcribe(audio_np, language="en", verbose=False, fp16=use_fp16)
                     transcript = (result.get("text") or "").strip()
+                    transcript_segments = [
+                        {
+                            "start": float(s.get("start", 0) or 0),
+                            "end": float(s.get("end", 0) or 0),
+                            "text": (s.get("text") or "").strip(),
+                        }
+                        for s in (result.get("segments") or [])
+                        if (s.get("text") or "").strip()
+                    ]
                     if duration <= 0 and result.get("segments"):
                         duration = float(max(s.get("end", 0) for s in result["segments"]))
 
@@ -380,6 +431,7 @@ Return ONLY a JSON object:
             out_clarity = None if insufficient else clarity_score
             out = {
                 "transcript": transcript,
+                "transcript_segments": transcript_segments,
                 "formatted_transcript": formatted_transcript,
                 "word_count": word_count,
                 "speaking_speed_wpm": speaking_wpm,

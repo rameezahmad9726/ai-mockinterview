@@ -134,9 +134,18 @@ class SessionSummary(BaseModel):
     error_message: Optional[str] = None
     overall_score: Optional[float] = None
     decision: Optional[DecisionStatus] = None
+    decision_reason: Optional[str] = None
+    decision_source: Optional[str] = None  # "system" | "hr"
 
     class Config:
         orm_mode = True
+
+
+class RerunDecisionResponse(BaseModel):
+    status: Optional[DecisionStatus] = None
+    reason: Optional[str] = None
+    unchanged: bool = False
+    skipped_manual: bool = False
 
 
 class SessionDetail(SessionSummary):

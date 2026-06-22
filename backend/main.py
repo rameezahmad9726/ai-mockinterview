@@ -1,3 +1,4 @@
+import asyncio
 import os
 print("Starting backend...")
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
@@ -276,7 +277,7 @@ async def tts_endpoint(data: dict):
     if not text or not session_id:
         raise HTTPException(status_code=400, detail="Missing text or session_id")
 
-    path = generate_speech(text, session_id, index)
+    path = await asyncio.to_thread(generate_speech, text, session_id, index)
     if not path:
         raise HTTPException(status_code=500, detail="TTS generation failed")
 
@@ -300,7 +301,7 @@ async def tts_batch_endpoint(data: dict):
         {"text": q.get("question", q.get("text", "")), "index": q.get("index", i)}
         for i, q in enumerate(questions_raw)
     ]
-    results = generate_speech_batch(session_id, questions)
+    results = await asyncio.to_thread(generate_speech_batch, session_id, questions)
     return {"urls": results}
 
 

@@ -170,6 +170,60 @@ def _transcript_candidate_text(formatted_transcript: List[Dict[str, Any]]) -> st
     return " ".join(chunks).strip()
 
 
+def _segment_overlaps_window(seg_start: float, seg_end: float, win_start: float, win_end: float) -> bool:
+    return seg_end > win_start and seg_start < win_end
+
+
+def _extract_answers_by_windows(
+    answer_windows: Optional[List[Dict[str, Any]]],
+    transcript_segments: Optional[List[Dict[str, Any]]],
+    raw_transcript: str,
+    audio_duration_sec: float,
+) -> Dict[int, str]:
+    """
+    Map candidate speech to each question using frontend answer windows and
+    Whisper segment timestamps. Falls back to proportional word slicing.
+    """
+    windows = list(answer_windows or [])
+    if not windows:
+        return {}
+
+    segments = list(transcript_segments or [])
+    by_q: Dict[int, str] = {}
+    words = (raw_transcript or "").split()
+
+    for w in windows:
+        try:
+            qidx = int(w.get("question_idx", -1))
+            ws = float(w.get("start_sec", 0))
+            we = float(w.get("end_sec", ws))
+        except (TypeError, ValueError):
+            continue
+        if qidx < 0 or we <= ws:
+            continue
+
+        parts: List[str] = []
+        if segments:
+            for seg in segments:
+                ss = float(seg.get("start", seg.get("start_sec", 0)) or 0)
+                se = float(seg.get("end", seg.get("end_sec", ss)) or ss)
+                text = (seg.get("text") or "").strip()
+                if text and _segment_overlaps_window(ss, se, ws, we):
+                    parts.append(text)
+        elif words and audio_duration_sec > 0:
+            i0 = max(0, int((ws / audio_duration_sec) * len(words)))
+            i1 = min(len(words), max(i0 + 1, int((we / audio_duration_sec) * len(words))))
+            chunk = " ".join(words[i0:i1]).strip()
+            if chunk:
+                parts.append(chunk)
+
+        merged = " ".join(parts).strip()
+        if merged and len(merged.split()) >= 2:
+            by_q[qidx] = merged
+
+    return by_q
+
+
 # ======================================================================
 # 1) Answers scoring (0–60) + interview notes (LLM)
 # ======================================================================
@@ -221,6 +275,10 @@ def compute_answer_scoring(
     raw_transcript: str,
     domain: str,
     insufficient: bool,
+    *,
+    answer_windows: Optional[List[Dict[str, Any]]] = None,
+    transcript_segments: Optional[List[Dict[str, Any]]] = None,
+    audio_duration_sec: float = 0.0,
 ) -> AnswerScoreResult:
     """
     Uses the LLM to (1) map the diarized transcript back to each scheduled
@@ -232,7 +290,14 @@ def compute_answer_scoring(
         return AnswerScoreResult(total_0_60=0.0, per_question=[], average_relevance_0_10=0.0,
                                  rationale="No questions supplied.")
 
-    if insufficient:
+    window_answers = _extract_answers_by_windows(
+        answer_windows,
+        transcript_segments,
+        raw_transcript,
+        audio_duration_sec,
+    )
+
+    if insufficient and not window_answers:
         notes = [
             InterviewNote(
                 question_idx=idx,
@@ -292,11 +357,13 @@ You will receive:
   - The ordered list of scheduled questions.
   - The diarized interview transcript (Interviewer vs Interviewee) AND the raw
     transcript as a safety fallback.
+  - Pre-extracted candidate speech per question from answer timestamps (PREFER
+    these when present — they are more reliable than diarization alone).
 
 TASKS:
 1. For EACH scheduled question (in order), extract the candidate's answer
-   VERBATIM from the Interviewee segments. If the candidate never answered a
-   given question, set answer to "[No audible response]".
+   VERBATIM. Prefer `pre_extracted_by_question` when provided for that index.
+   If the candidate never answered a given question, set answer to "[No audible response]".
 2. Score each answer on relevance, correctness and depth for the "{domain}"
    role, from 0 to 10 (10 = excellent, complete, specific; 5 = partially
    relevant / shallow; 0 = off-topic or missing).
@@ -321,6 +388,9 @@ Return ONLY JSON:
 
 Scheduled questions (ordered):
 {json.dumps(q_list, ensure_ascii=False)}
+
+Pre-extracted candidate speech by question index (from timestamps):
+{json.dumps(window_answers, ensure_ascii=False)}
 
 Transcript:
 {json.dumps(transcript_blob, ensure_ascii=False)}
@@ -350,13 +420,20 @@ Transcript:
         for idx, q in enumerate(q_list):
             r = by_idx.get(idx, {})
             score = _clamp(_safe_float(r.get("answer_score_0_10"), 0.0), 0.0, 10.0)
+            candidate_answer = str(r.get("candidate_answer", "")).strip()
+            if (
+                (not candidate_answer or candidate_answer.lower() == "[no audible response]")
+                and idx in window_answers
+            ):
+                candidate_answer = window_answers[idx]
+            if not candidate_answer:
+                candidate_answer = "[No audible response]"
             scores.append(score)
             notes.append(InterviewNote(
                 question_idx=idx,
                 question=q["question"],
                 question_type=q.get("type", "General"),
-                candidate_answer=str(r.get("candidate_answer", "[No audible response]")).strip()
-                                 or "[No audible response]",
+                candidate_answer=candidate_answer,
                 evaluation=str(r.get("evaluation", "")).strip(),
                 answer_score_0_10=round(score, 2),
             ))
@@ -777,6 +854,9 @@ def compute_final_scoring(
         raw_transcript=raw_transcript,
         domain=domain,
         insufficient=insufficient,
+        answer_windows=answer_windows,
+        transcript_segments=speech.get("transcript_segments"),
+        audio_duration_sec=_safe_float(speech.get("audio_duration_seconds"), 0.0),
     )
     cert_result = compute_certification_scoring(
         certifications=certifications,
