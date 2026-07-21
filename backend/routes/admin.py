@@ -192,7 +192,7 @@ def update_job(
     return job
 
 
-@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_job(job_id: int, db: Session = Depends(get_db), current: User = Depends(require_hr)) -> None:
     job = db.get(Job, job_id)
     if not job:

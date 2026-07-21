@@ -1,0 +1,14 @@
+.venv
+.venv/
+venv_freeze.txt
+*.db
+*.db.bak
+uploads
+artifacts
+models
+data
+tests
+frontend
+.git
+__pycache__
+*.pyc
