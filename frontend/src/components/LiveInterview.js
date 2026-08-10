@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { MicrophoneIcon, VideoCameraIcon, StopIcon, SpeakerWaveIcon, ChevronRightIcon, PlayIcon } from '@heroicons/react/24/outline';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { MicrophoneIcon, VideoCameraIcon, StopIcon, SpeakerWaveIcon, ChevronRightIcon, PlayIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import useIntegrityMonitor from '../hooks/useIntegrityMonitor';
 
 /**
  * Props:
@@ -24,6 +25,7 @@ const LiveInterview = ({
     customUpload,
     customPoll,
     onAnalysisDone,
+    onIntegrityEvent,
     autoUploadOnFinish = false,
     waitForAnalysis = true,
     hidePostInterviewActions = false,
@@ -56,6 +58,18 @@ const LiveInterview = ({
     const recordingStartRef = useRef(null);           // ms timestamp
     const currentAnswerRef = useRef(null);            // { idx, start_sec } | null
     const answerWindowsRef = useRef([]);              // [{question_idx, start_sec, end_sec}]
+
+    // --- Integrity monitoring (cheating detection) ---
+    const stableOnIntegrityEvent = useCallback(
+        (evt) => { if (onIntegrityEvent) onIntegrityEvent(evt); },
+        [onIntegrityEvent],
+    );
+    const { events: integrityEvents } = useIntegrityMonitor({
+        active: isRecording,
+        stream,
+        recordingStartMs: recordingStartRef.current,
+        onEvent: stableOnIntegrityEvent,
+    });
 
     useEffect(() => {
         let timer;
@@ -611,12 +625,69 @@ const LiveInterview = ({
                                 </button>
                             </div>
                         )}
-                        {isRecording && (
-                            <div className="absolute top-4 left-4 flex items-center bg-red-600/80 text-white px-3 py-1 rounded-full text-sm font-bold animate-pulse">
-                                <div className="w-2 h-2 bg-white rounded-full mr-2"></div>
-                                LIVE RECORDING
-                            </div>
-                        )}
+                        {isRecording && (() => {
+                            const hasNoFace = integrityEvents.some(e => e.kind === 'no_face');
+                            const hasMultiFace = integrityEvents.some(e => e.kind === 'multi_face');
+                            const hasTabSwitch = integrityEvents.some(e => e.kind === 'tab_switch');
+                            const lastEvent = integrityEvents.length > 0 ? integrityEvents[integrityEvents.length - 1] : null;
+
+                            return (
+                                <>
+                                    <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none z-10 flex-wrap gap-2">
+                                        <div className="flex items-center bg-red-600/90 text-white px-3 py-1 rounded-full text-xs font-bold animate-pulse shadow-md">
+                                            <div className="w-2 h-2 bg-white rounded-full mr-2"></div>
+                                            LIVE RECORDING
+                                        </div>
+
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            {hasNoFace && (
+                                                <div className="flex items-center bg-rose-950/90 text-rose-200 border border-rose-500/50 px-2.5 py-1 rounded-full text-[11px] font-semibold gap-1.5 shadow-md">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
+                                                    No Face
+                                                </div>
+                                            )}
+
+                                            {hasMultiFace && (
+                                                <div className="flex items-center bg-purple-950/90 text-purple-200 border border-purple-500/50 px-2.5 py-1 rounded-full text-[11px] font-semibold gap-1.5 shadow-md">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+                                                    Multi Face
+                                                </div>
+                                            )}
+
+                                            {hasTabSwitch && (
+                                                <div className="flex items-center bg-amber-950/90 text-amber-200 border border-amber-500/50 px-2.5 py-1 rounded-full text-[11px] font-semibold gap-1.5 shadow-md">
+                                                    <ExclamationTriangleIcon className="h-3.5 w-3.5 text-amber-400" />
+                                                    Tab Switch
+                                                </div>
+                                            )}
+
+                                        </div>
+                                    </div>
+
+                                    {lastEvent && (
+                                        <div className="absolute bottom-4 left-4 right-4 bg-slate-950/90 border border-slate-600/50 backdrop-blur-md rounded-xl p-3 flex items-center justify-between text-xs text-slate-200 shadow-xl z-10">
+                                            <div className="flex items-center gap-2">
+                                                <ExclamationTriangleIcon className="h-5 w-5 text-amber-400 shrink-0" />
+                                                <div>
+                                                    <span className="font-bold text-amber-300">Integrity Alert: </span>
+                                                    <span>
+                                                        {
+                                                            lastEvent.kind === 'no_face' ? 'No Face Detected in Camera View' :
+                                                            lastEvent.kind === 'multi_face' ? 'Multiple Faces Detected in Camera View' :
+                                                            lastEvent.kind === 'tab_switch' ? 'Tab or Window Switched' :
+                                                            'Microphone Silence Detected'
+                                                        }
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <span className="font-mono text-[11px] font-semibold text-amber-400 bg-amber-900/50 px-2 py-0.5 rounded border border-amber-700/50">
+                                                {lastEvent.at_sec}s
+                                            </span>
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
                     </div>
 
                     {/* Question Display */}

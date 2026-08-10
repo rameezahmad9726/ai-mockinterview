@@ -206,7 +206,7 @@ Return ONLY a JSON object:
                         sum(1 for w in seg_words if w in transcript_words) / max(len(seg_words), 1) >= 0.5)
                     if len(text_norm) > 10 and not (exact_match or word_overlap):
                         validated.append({"speaker": "Interviewee", "text": "[No audible response]"})
-                        print(f"[WARN] Removed hallucinated interviewee segment (not in transcript)")
+                        print("[WARN] Removed hallucinated interviewee segment (not in transcript)")
                     else:
                         validated.append(seg)
                 else:

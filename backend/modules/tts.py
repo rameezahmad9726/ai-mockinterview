@@ -6,6 +6,9 @@ from modules.question_generator import _get_client, OPENAI_MODEL
 # We'll use a specific TTS model
 TTS_MODEL = "tts-1"
 
+# Resolve backend directory for consistent path handling
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+
 def generate_speech(text: str, session_id: str, question_index: int):
     """
     Generate speech from text using OpenAI TTS.
@@ -15,7 +18,7 @@ def generate_speech(text: str, session_id: str, question_index: int):
         client = _get_client()
         
         # Create output directory
-        output_dir = Path("uploads") / session_id / "tts"
+        output_dir = _BACKEND_DIR / "uploads" / session_id / "tts"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         output_path = output_dir / f"question_{question_index}.mp3"
@@ -39,7 +42,7 @@ def generate_speech_batch(session_id: str, questions: list):
     questions: list of {"text": "...", "index": int}
     Returns: list of {"index": int, "url": str} or None on error
     """
-    output_dir = Path("uploads") / session_id / "tts"
+    output_dir = _BACKEND_DIR / "uploads" / session_id / "tts"
     output_dir.mkdir(parents=True, exist_ok=True)
     base_url = "http://localhost:8000/tts"
 

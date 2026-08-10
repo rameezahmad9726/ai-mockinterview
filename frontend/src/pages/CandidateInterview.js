@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { API_BASE, apiFetch } from '../api';
 import LiveInterview from '../components/LiveInterview';
@@ -86,6 +86,21 @@ export default function CandidateInterview() {
   const onSubmitted = () => {
     setStage(STAGE.COMPLETE);
   };
+
+  // Fire-and-forget: POST integrity events to backend during recording.
+  const onIntegrityEvent = useCallback(
+    (evt) => {
+      if (!token) return;
+      fetch(`${API_BASE}/api/interview/${token}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(evt),
+      }).catch(() => {
+        /* swallow — never block the interview for a monitoring request */
+      });
+    },
+    [token],
+  );
 
   // --- Stage renderers ---
   if (stage === STAGE.LOADING) {
@@ -195,6 +210,7 @@ export default function CandidateInterview() {
           resumeContext={null /* already on server */}
           customUpload={customUpload}
           onAnalysisDone={onSubmitted}
+          onIntegrityEvent={onIntegrityEvent}
           autoUploadOnFinish
           waitForAnalysis={false}
           hidePostInterviewActions

@@ -149,22 +149,165 @@ function AiSummary({ summary, status, summaryLoading, onGenerate, generating }) 
   );
 }
 
+const FLAG_CONFIG = {
+  tab_switch: {
+    label: 'Tab / Window Switched',
+    badgeClass: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
+    iconBg: 'bg-amber-500/20 text-amber-300',
+    severity: 'WARNING',
+    getDescription: (meta) => {
+      if (meta?.trigger === 'window_blur') return 'Candidate switched browser tab or lost window focus';
+      if (meta?.trigger === 'visibility_hidden') return 'Candidate minimized or hid the browser window';
+      return 'Candidate navigated away from the interview tab';
+    },
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+      </svg>
+    ),
+  },
+  no_face: {
+    label: 'No Face Detected',
+    badgeClass: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
+    iconBg: 'bg-rose-500/20 text-rose-300',
+    severity: 'CRITICAL',
+    getDescription: (meta) => `No candidate face detected in camera frame for ${meta?.duration || 1.0}s`,
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+      </svg>
+    ),
+  },
+  multi_face: {
+    label: 'Multiple Faces Detected',
+    badgeClass: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
+    iconBg: 'bg-rose-500/20 text-rose-300',
+    severity: 'CRITICAL',
+    getDescription: (meta) => `${meta?.max_faces || 2} faces detected simultaneously in camera for ${meta?.duration || 1.0}s`,
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+      </svg>
+    ),
+  },
+  copy_paste: {
+    label: 'Clipboard Paste',
+    badgeClass: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+    iconBg: 'bg-purple-500/20 text-purple-300',
+    severity: 'CRITICAL',
+    getDescription: (meta) => `Pasted text content directly into answer input (${meta?.length || 'unknown'} characters)`,
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+      </svg>
+    ),
+  },
+  silence: {
+    label: 'Microphone Silence',
+    badgeClass: 'bg-sky-500/10 text-sky-400 border-sky-500/30',
+    iconBg: 'bg-sky-500/20 text-sky-300',
+    severity: 'NOTICE',
+    getDescription: (meta) => `No audio/speech detected from microphone for ${meta?.duration || 8}s`,
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+      </svg>
+    ),
+  },
+};
+
+function formatSec(sec) {
+  const s = Math.max(0, Math.floor(Number(sec || 0)));
+  const mins = Math.floor(s / 60);
+  const remainderSecs = s % 60;
+  return `${mins.toString().padStart(2, '0')}:${remainderSecs.toString().padStart(2, '0')}`;
+}
+
 function IntegrityList({ flags }) {
   if (!flags || flags.length === 0) {
-    return <p className="text-sm text-slate-500">No integrity flags recorded.</p>;
+    return (
+      <div className="flex items-center gap-2 text-slate-400 text-xs py-3 px-4 bg-slate-900/30 rounded-lg border border-slate-800">
+        <svg className="w-4 h-4 text-emerald-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span>No integrity violations or suspicious activities recorded.</span>
+      </div>
+    );
   }
+
+  const criticalCount = flags.filter(f => ['no_face', 'multi_face', 'copy_paste'].includes(f.kind)).length;
+
   return (
-    <ul className="space-y-2">
-      {flags.map((f, i) => (
-        <li key={i} className="text-sm text-slate-300 bg-slate-900/40 border border-slate-700 rounded px-3 py-2">
-          <span className="font-medium text-amber-300">{f.kind}</span>
-          <span className="text-slate-500 ml-2">at {Number(f.at_sec || 0).toFixed(1)}s</span>
-          {f.meta && Object.keys(f.meta).length > 0 && (
-            <pre className="text-xs text-slate-500 mt-1 font-mono">{JSON.stringify(f.meta)}</pre>
-          )}
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between text-xs text-slate-400 mb-1 px-1">
+        <span>Total Flags: <strong className="text-slate-200">{flags.length}</strong></span>
+        {criticalCount > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-rose-400 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-800/60 font-medium text-[11px]">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+            {criticalCount} Critical Flag{criticalCount > 1 ? 's' : ''}
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        {flags.map((f, i) => {
+          const config = FLAG_CONFIG[f.kind] || {
+            label: f.kind || 'Flag',
+            badgeClass: 'bg-slate-700/40 text-slate-300 border-slate-600',
+            iconBg: 'bg-slate-800 text-slate-400',
+            severity: 'NOTICE',
+            getDescription: () => 'System recorded event',
+            icon: (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            ),
+          };
+
+          const timeFormatted = formatSec(f.at_sec);
+          const rawSec = Number(f.at_sec || 0).toFixed(1);
+          const description = config.getDescription(f.meta);
+
+          return (
+            <div
+              key={i}
+              className="group relative overflow-hidden bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800 hover:border-slate-700 rounded-xl p-3.5 transition-all duration-200"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className={`p-2 rounded-lg ${config.iconBg} shrink-0 mt-0.5`}>
+                    {config.icon}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-sm text-slate-100">{config.label}</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${config.badgeClass}`}>
+                        {config.severity}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                      {description}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                  <span className="inline-flex items-center gap-1 font-mono text-xs font-medium text-amber-300/90 bg-amber-950/30 px-2 py-1 rounded border border-amber-800/40">
+                    <svg className="w-3 h-3 text-amber-400 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    {timeFormatted} <span className="text-[10px] text-slate-500">({rawSec}s)</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

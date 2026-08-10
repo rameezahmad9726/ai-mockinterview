@@ -5,7 +5,6 @@ Generates a sample audio file and analyzes it with Whisper.
 """
 
 import sys
-import os
 from pathlib import Path
 import numpy as np
 from scipy.io import wavfile
@@ -102,7 +101,7 @@ def test_speech_analysis(analyzer, audio_path):
             assert key in result, f"Missing key in result: {key}"
         
         print("[INFO] Analysis completed successfully")
-        print(f"\n  Results:")
+        print("\n  Results:")
         print(f"  - Transcript: {result['transcript'][:100]}..." if len(result['transcript']) > 100 else f"  - Transcript: {result['transcript']}")
         print(f"  - Word count: {result['word_count']}")
         print(f"  - Speaking speed: {result['speaking_speed_wpm']} WPM")
@@ -124,13 +123,13 @@ def test_small_model():
     
     try:
         analyzer = SpeechAnalyzer(model_name="tiny")
-        print(f"[INFO] SpeechAnalyzer with 'tiny' model initialized")
+        print("[INFO] SpeechAnalyzer with 'tiny' model initialized")
         print(f"  Model name: {analyzer.model_name}")
-        print(f"  (Model will load on first use)")
+        print("  (Model will load on first use)")
         
         # Try to load the model
         if analyzer._ensure_model_loaded():
-            print(f"[INFO] 'tiny' model loaded successfully")
+            print("[INFO] 'tiny' model loaded successfully")
             return True
         else:
             print(f"[WARN] Failed to load 'tiny' model: {analyzer._load_error}")

@@ -49,7 +49,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_ROOT = Path("uploads")
+UPLOAD_ROOT = Path(__file__).resolve().parent / "uploads"
 UPLOAD_ROOT.mkdir(exist_ok=True)
 
 # Global store for tracking analysis progress
@@ -111,6 +111,48 @@ def run_analysis_task(video_path, session_id, parsed_questions, resume_context=N
         print(f"Error in background task: {e}")
         progress_store[session_id]["status"] = "error"
         progress_store[session_id]["message"] = _format_runtime_error(e)
+
+@app.post("/detect-faces")
+async def detect_faces(file: UploadFile = File(...)):
+    """
+    Accepts a JPEG frame from the candidate's webcam and returns face count.
+    Used for real-time multi_face / no_face detection in the live interview UI.
+    """
+    try:
+        import cv2
+        import numpy as np
+
+        data = await file.read()
+        arr = np.frombuffer(data, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return {"faces": -1, "error": "Could not decode image"}
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        f_cas = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        p_cas = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+
+        ff = f_cas.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(35, 35))
+        pf = p_cas.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(35, 35)) if not p_cas.empty() else []
+
+        boxes = list(ff) + list(pf)
+        if not p_cas.empty():
+            flipped = cv2.flip(gray, 1)
+            pf_flip = p_cas.detectMultiScale(flipped, scaleFactor=1.1, minNeighbors=4, minSize=(35, 35))
+            for (x, y, w, h) in pf_flip:
+                boxes.append((gray.shape[1] - x - w, y, w, h))
+
+        if boxes:
+            merged, _ = cv2.groupRectangles(boxes + boxes, 1, 0.3)
+            face_count = int(len(merged))
+        else:
+            face_count = 0
+
+        return {"faces": face_count}
+    except Exception as e:
+        return {"faces": -1, "error": str(e)}
+
 
 @app.post("/analyze")
 async def analyze_video(
@@ -307,7 +349,7 @@ async def tts_batch_endpoint(data: dict):
 
 @app.get("/tts/{session_id}/{filename}")
 def get_tts_file(session_id: str, filename: str):
-    file_path = Path("uploads") / session_id / "tts" / filename
+    file_path = Path(__file__).resolve().parent / "uploads" / session_id / "tts" / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="TTS file not found")
     return FileResponse(path=str(file_path))
@@ -322,7 +364,7 @@ def get_lacking_frame(session_id: str, filename: str):
     """
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
-    file_path = Path("uploads") / session_id / "lacking_frames" / filename
+    file_path = Path(__file__).resolve().parent / "uploads" / session_id / "lacking_frames" / filename
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Frame not found")
     return FileResponse(path=str(file_path), media_type="image/jpeg")

@@ -129,6 +129,14 @@ def run_eye_contact_analysis(frames_dir, subsample_step=None):
             "error": str(e),
         }
 
+def run_face_detection(frames_dir, fps):
+    try:
+        from modules.face_detection import analyze_face_presence
+        return analyze_face_presence(str(frames_dir), fps)
+    except Exception as e:
+        print(f"[WARN] Face detection unavailable: {e}")
+        return []
+
 
 # Shared SpeechAnalyzer (reuse across analyses)
 _speech_analyzer = None
@@ -436,12 +444,13 @@ def process_video(
             }
         return run_speech_analysis(audio_path, questions)
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         futures = {
             ex.submit(run_speech): "speech",
             ex.submit(run_emotion_analysis, str(frames_dir), SUBSAMPLE_STEP): "emotion",
             ex.submit(run_body_language_analysis, str(frames_dir), SUBSAMPLE_STEP): "body",
             ex.submit(run_eye_contact_analysis, str(frames_dir), SUBSAMPLE_STEP): "eye",
+            ex.submit(run_face_detection, str(frames_dir), 1): "face",
         }
         for fut in as_completed(futures):
             key = futures[fut]
@@ -457,8 +466,10 @@ def process_video(
                     emotion_data = result
                 elif key == "body":
                     body_data = result
-                else:
+                elif key == "eye":
                     eye_data = result
+                else:
+                    face_flags = result
             except Exception as e:
                 print(f"[ERROR] {key} failed: {e}")
                 if key == "speech":
@@ -477,16 +488,20 @@ def process_video(
                         "gesture_label": "Pose not detected (ensure upper body visible)",
                         "posture_per_frame": [],
                     }
-                else:
+                elif key == "eye":
                     eye_data = {
                         "eye_contact_per_frame": [],
                         "avg_eye_contact": 0.0,
                         "frames_analyzed": 0,
                         "eye_contact_available": False,
                     }
+                else:
+                    face_flags = []
 
     if speech is None:
         speech = {"error": "Speech analysis failed", "transcript": "", "word_count": 0, "speaking_speed_wpm": 0, "clarity_score": 5, "confidence_score": 5}
+    if 'face_flags' not in locals():
+        face_flags = []
     if emotion_data is None:
         emotion_data = {
             "dominant_emotion": "Neutral",
@@ -636,6 +651,29 @@ def process_video(
         _tb.print_exc()
         print(f"[ERROR] Scoring engine failed: {e}")
         report["scoring"] = {"error": str(e)}
+
+    # Append face detection integrity flags to the DB session if any
+    if session_id and face_flags:
+        try:
+            from database import SessionLocal
+            from models import InterviewSession
+            db = SessionLocal()
+            try:
+                sess = db.query(InterviewSession).filter(
+                    InterviewSession.external_id == session_id
+                ).first()
+                if sess:
+                    current_flags = list(sess.integrity_flags or [])
+                    current_flags.extend(face_flags)
+                    sess.integrity_flags = current_flags
+                    db.commit()
+                    print(f"[INFO] Saved {len(face_flags)} face integrity flags for session {session_id}")
+                else:
+                    print(f"[WARN] Session {session_id} not found in DB; face flags not saved")
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[ERROR] Failed to save face integrity flags to DB: {e}")
 
     # ---------------------------------------------------
     # Save JSON + HTML

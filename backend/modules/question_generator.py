@@ -582,6 +582,7 @@ def analyze_resume_communication(resume_text: str) -> dict:
     try:
         client = _get_client()
     except Exception as e:
+        print(f"[WARN] Client init failed: {e}")
         return {"tone_analysis": None, "improvement_tip": None, "confidence_rating": 5}
 
     prompt = f"""
@@ -642,4 +643,6 @@ def analyze_resume_communication(resume_text: str) -> dict:
             "confidence_rating": data.get("confidence_rating", 5),
         }
     except Exception as e:
+        print(f"[WARN] Client init failed: {e}")
         return {"tone_analysis": None, "improvement_tip": None, "confidence_rating": 5}
+
